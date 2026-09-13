@@ -1,0 +1,15 @@
+[package]
+name = "diorama_raytracing"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+minifb = "0.28.0"
+nalgebra-glm = "0.21.0"
+
+[profile.dev]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = true

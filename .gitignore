@@ -1,0 +1,23 @@
+# Material y datos crudos (proporcionados para análisis)
+raw_info/
+docs/
+
+# Build y binarios
+build/
+bin/
+*.o
+*.out
+*.exe
+*.dSYM/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Entornos o carpetas no relacionadas
+juice-shop/
+
+
+# Added by cargo
+
+/target
