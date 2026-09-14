@@ -4,6 +4,7 @@ mod cube;
 mod framebuffer;
 mod ray_intersect;
 mod scene;
+mod texture;
 
 use minifb::{Key, Window, WindowOptions};
 use nalgebra_glm::{normalize, Vec3};
@@ -16,6 +17,7 @@ use crate::cube::Cube;
 use crate::framebuffer::Framebuffer;
 use crate::ray_intersect::{Material, RayIntersect};
 use crate::scene::Scene;
+use crate::texture::Texture;
 
 const WIDTH: usize = 800;
 const HEIGHT: usize = 600;
@@ -41,12 +43,8 @@ fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene) -> Color {
         return scene.background_color;
     };
 
-    let n = intersect.normal;
-    Color::new(
-        ((n.x * 0.5 + 0.5) * 255.0) as u8,
-        ((n.y * 0.5 + 0.5) * 255.0) as u8,
-        ((n.z * 0.5 + 0.5) * 255.0) as u8,
-    )
+    let texture = &scene.textures[intersect.material.texture_id];
+    texture.sample(intersect.u, intersect.v)
 }
 
 fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera) {
@@ -74,27 +72,25 @@ fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera) {
 }
 
 fn build_test_scene() -> Scene {
-    let grass = Material::new(Color::new(90, 160, 70));
-    let stone = Material::new(Color::new(120, 120, 130));
-    let wood = Material::new(Color::new(120, 80, 40));
+    let textures = vec![Texture::from_bmp("assets/textures/debug_uv.bmp")];
+    let debug = Material::new(0);
 
     let mut cubes = Vec::new();
 
     for grid_x in -1..=1 {
         for grid_z in -1..=1 {
-            let material = if (grid_x + grid_z) % 2 == 0 { grass } else { stone };
             cubes.push(Cube::new(
-                Vec3::new(grid_x as f32, -1.0, grid_z as f32),
+                Vec3::new(grid_x as f32 * 1.1, -1.0, grid_z as f32 * 1.1),
                 Vec3::new(0.98, 0.98, 0.98),
-                material,
+                debug,
             ));
         }
     }
 
-    cubes.push(Cube::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0), wood));
-    cubes.push(Cube::new(Vec3::new(1.5, 0.5, -0.5), Vec3::new(0.6, 1.6, 0.6), stone));
+    cubes.push(Cube::new(Vec3::new(0.0, 0.1, 0.0), Vec3::new(1.0, 1.0, 1.0), debug));
+    cubes.push(Cube::new(Vec3::new(2.0, 0.6, -0.6), Vec3::new(0.6, 1.6, 0.6), debug));
 
-    Scene::new(cubes, Color::from_hex(BACKGROUND_COLOR))
+    Scene::new(cubes, textures, Color::from_hex(BACKGROUND_COLOR))
 }
 
 fn main() {

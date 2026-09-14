@@ -1,14 +1,13 @@
-use crate::color::Color;
 use nalgebra_glm::Vec3;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Material {
-    pub color: Color,
+    pub texture_id: usize,
 }
 
 impl Material {
-    pub fn new(color: Color) -> Self {
-        Material { color }
+    pub fn new(texture_id: usize) -> Self {
+        Material { texture_id }
     }
 }
 
