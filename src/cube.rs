@@ -1,4 +1,4 @@
-use crate::ray_intersect::{Intersect, Material, RayIntersect};
+use crate::ray_intersect::{FaceTextures, Intersect, Material, RayIntersect};
 use nalgebra_glm::Vec3;
 
 const EPSILON: f32 = 1e-4;
@@ -7,15 +7,17 @@ pub struct Cube {
     pub min: Vec3,
     pub max: Vec3,
     pub material: Material,
+    pub textures: FaceTextures,
 }
 
 impl Cube {
-    pub fn new(center: Vec3, size: Vec3, material: Material) -> Self {
+    pub fn new(center: Vec3, size: Vec3, material: Material, textures: FaceTextures) -> Self {
         let half = size * 0.5;
         Cube {
             min: center - half,
             max: center + half,
             material,
+            textures,
         }
     }
 
@@ -104,12 +106,19 @@ impl RayIntersect for Cube {
 
         let (u, v) = self.face_uv(&point, axis, sign);
 
+        let texture_id = match axis {
+            1 if sign > 0.0 => self.textures.top,
+            1 => self.textures.bottom,
+            _ => self.textures.side,
+        };
+
         Some(Intersect {
             point,
             normal,
             distance,
             u,
             v,
+            texture_id,
             material: self.material,
         })
     }

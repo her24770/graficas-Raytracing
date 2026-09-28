@@ -1,0 +1,537 @@
+use std::collections::HashMap;
+
+use nalgebra_glm::Vec3;
+
+use crate::cube::Cube;
+use crate::ray_intersect::{FaceTextures, Material};
+use crate::scene::Scene;
+use crate::texture::Texture;
+
+const TEXTURE_FILES: [&str; 18] = [
+    "grass_block_top",
+    "grass_block_side",
+    "dirt",
+    "stone",
+    "deepslate",
+    "stone_bricks",
+    "oak_log",
+    "oak_planks",
+    "spruce_planks",
+    "oak_leaves",
+    "water_still",
+    "dirt_path_top",
+    "farmland",
+    "wheat_stage7",
+    "glass",
+    "obsidian",
+    "nether_portal",
+    "glowstone",
+];
+
+const SIZE: i32 = 24;
+const CENTER: f32 = 11.5;
+const RADIUS: f32 = 11.5;
+
+const NEIGHBORS: [(i32, i32, i32); 6] = [
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, 1),
+    (0, 0, -1),
+];
+
+fn tex(name: &str) -> usize {
+    TEXTURE_FILES
+        .iter()
+        .position(|file| *file == name)
+        .unwrap_or_else(|| panic!("textura no registrada: {name}"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Block {
+    Grass,
+    Dirt,
+    Stone,
+    Deepslate,
+    StoneBricks,
+    StoneSlab,
+    OakLog,
+    OakPlanks,
+    SprucePlanks,
+    Leaves,
+    Water,
+    Droplet,
+    DirtPath,
+    Farmland,
+    Wheat,
+    Glass,
+    Obsidian,
+    Portal,
+    Torch,
+    Fence,
+}
+
+impl Block {
+    fn is_opaque_full(self) -> bool {
+        !matches!(
+            self,
+            Block::Water
+                | Block::Droplet
+                | Block::Glass
+                | Block::Portal
+                | Block::Torch
+                | Block::Fence
+                | Block::Wheat
+                | Block::StoneSlab
+        )
+    }
+
+    fn appearance(self) -> (FaceTextures, Material) {
+        let opaque = Material::new(0.9, 0.1, 0.0, 0.0, 1.0, 0.0);
+        let water = Material::new(0.3, 0.5, 0.3, 0.6, 1.33, 0.0);
+        let uniform = |name: &str| FaceTextures::uniform(tex(name));
+
+        match self {
+            Block::Grass => (
+                FaceTextures::top_side_bottom(
+                    tex("grass_block_top"),
+                    tex("grass_block_side"),
+                    tex("dirt"),
+                ),
+                opaque,
+            ),
+            Block::Dirt => (uniform("dirt"), opaque),
+            Block::Stone => (uniform("stone"), opaque),
+            Block::Deepslate => (uniform("deepslate"), opaque),
+            Block::StoneBricks | Block::StoneSlab => (uniform("stone_bricks"), opaque),
+            Block::OakLog => (uniform("oak_log"), opaque),
+            Block::OakPlanks | Block::Fence => (uniform("oak_planks"), opaque),
+            Block::SprucePlanks => (uniform("spruce_planks"), opaque),
+            Block::Leaves => (uniform("oak_leaves"), opaque),
+            Block::Water | Block::Droplet => (uniform("water_still"), water),
+            Block::DirtPath => (
+                FaceTextures::top_side_bottom(tex("dirt_path_top"), tex("dirt"), tex("dirt")),
+                opaque,
+            ),
+            Block::Farmland => (
+                FaceTextures::top_side_bottom(tex("farmland"), tex("dirt"), tex("dirt")),
+                opaque,
+            ),
+            Block::Wheat => (uniform("wheat_stage7"), opaque),
+            Block::Glass => (uniform("glass"), Material::new(0.2, 0.6, 0.05, 0.9, 1.5, 0.0)),
+            Block::Obsidian => (uniform("obsidian"), Material::new(0.8, 0.4, 0.1, 0.0, 1.0, 0.0)),
+            Block::Portal => (
+                uniform("nether_portal"),
+                Material::new(0.7, 0.1, 0.1, 0.3, 1.0, 0.8),
+            ),
+            Block::Torch => (uniform("glowstone"), Material::new(0.9, 0.0, 0.0, 0.0, 1.0, 1.0)),
+        }
+    }
+}
+
+struct World {
+    blocks: HashMap<(i32, i32, i32), Block>,
+}
+
+impl World {
+    fn new() -> Self {
+        World {
+            blocks: HashMap::new(),
+        }
+    }
+
+    fn get(&self, x: i32, y: i32, z: i32) -> Option<Block> {
+        self.blocks.get(&(x, y, z)).copied()
+    }
+
+    fn set(&mut self, x: i32, y: i32, z: i32, block: Block) {
+        self.blocks.insert((x, y, z), block);
+    }
+
+    fn set_if_empty(&mut self, x: i32, y: i32, z: i32, block: Block) {
+        self.blocks.entry((x, y, z)).or_insert(block);
+    }
+
+    fn remove(&mut self, x: i32, y: i32, z: i32) {
+        self.blocks.remove(&(x, y, z));
+    }
+
+    fn is_opaque(&self, x: i32, y: i32, z: i32) -> bool {
+        self.get(x, y, z).is_some_and(Block::is_opaque_full)
+    }
+
+    fn top_y(&self, x: i32, z: i32) -> Option<i32> {
+        (-20..=20).rev().find(|&y| self.get(x, y, z).is_some())
+    }
+}
+
+fn hash(x: i32, z: i32) -> u32 {
+    let mut h = (x as u32).wrapping_mul(374_761_393) ^ (z as u32).wrapping_mul(668_265_263);
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    h ^ (h >> 16)
+}
+
+// 0 en el centro de la isla, 1 en el borde; contorno redondeado-cuadrado con ondulaciones.
+fn edge_distance(x: i32, z: i32) -> f32 {
+    let dx = (x as f32 - CENTER) / RADIUS;
+    let dz = (z as f32 - CENTER) / RADIUS;
+    let theta = dz.atan2(dx);
+    let wobble = 1.0 + 0.05 * (3.0 * theta + 0.5).sin() + 0.035 * (5.0 * theta + 2.0).sin();
+    (dx.abs().powf(3.0) + dz.abs().powf(3.0)).powf(1.0 / 3.0) / wobble
+}
+
+fn surface_height(x: i32, z: i32) -> i32 {
+    let jitter = if (6..=9).contains(&z) {
+        0
+    } else {
+        (hash(x, z) % 2) as i32
+    };
+
+    if x + jitter <= 7 && (1..=12).contains(&z) {
+        CLIFF_TOP
+    } else if x + jitter <= 6 && (13..=16).contains(&z) {
+        3
+    } else if x <= 4 && z >= 17 {
+        1
+    } else {
+        0
+    }
+}
+
+const CLIFF_TOP: i32 = 6;
+
+fn bottom_height(x: i32, z: i32, q: f32) -> i32 {
+    let depth = 5.0 + 6.0 * (1.0 - q).max(0.0).powf(0.7);
+    -(depth.round() as i32) - (hash(z, x) % 2) as i32
+}
+
+const RIVER_Z: std::ops::RangeInclusive<i32> = 15..=17;
+
+fn is_river(x: i32, z: i32) -> bool {
+    let pool = (9..=12).contains(&x) && (5..=11).contains(&z);
+    let back_branch = (10..=12).contains(&x) && (1..=4).contains(&z);
+    let fall_base = x == 8 && (7..=8).contains(&z);
+    let bend = (11..=13).contains(&x) && (12..=14).contains(&z);
+    let east = x >= 11 && RIVER_Z.contains(&z);
+    pool || back_branch || fall_base || bend || east
+}
+
+fn build_terrain(world: &mut World) {
+    for x in 0..SIZE {
+        for z in 0..SIZE {
+            let q = edge_distance(x, z);
+            if q > 1.0 {
+                continue;
+            }
+
+            let top = surface_height(x, z);
+            let bottom = bottom_height(x, z, q);
+            let dirt_depth = 2 + (hash(x + 7, z) % 2) as i32;
+            let deepslate_line = -6 + (hash(x, z + 3) % 2) as i32;
+
+            for y in bottom..=top {
+                let block = if y == top {
+                    Block::Grass
+                } else if y >= top - dirt_depth {
+                    Block::Dirt
+                } else if y > deepslate_line {
+                    Block::Stone
+                } else {
+                    Block::Deepslate
+                };
+                world.set(x, y, z, block);
+            }
+        }
+    }
+}
+
+fn build_water(world: &mut World) {
+    for x in 0..SIZE {
+        for z in 0..SIZE {
+            if is_river(x, z) && world.get(x, 0, z).is_some() && surface_height(x, z) == 0 {
+                world.set(x, 0, z, Block::Water);
+                world.set(x, -1, z, Block::Dirt);
+            }
+        }
+    }
+
+    // Arroyo sobre el acantilado y cascada principal.
+    for x in 3..=7 {
+        for z in 7..=8 {
+            world.set(x, CLIFF_TOP, z, Block::Water);
+        }
+    }
+    for y in 1..CLIFF_TOP {
+        for z in 7..=8 {
+            world.set(8, y, z, Block::Water);
+        }
+    }
+
+    // Escalinata de piedra junto a la cascada.
+    for (z, height) in [(9, 5), (10, 4), (11, 3), (12, 2), (13, 1)] {
+        for y in 1..=height {
+            world.set(8, y, z, Block::StoneBricks);
+        }
+    }
+
+    // El rio cae por el borde este y se deshace en gotas.
+    for z in RIVER_Z {
+        let edge_x = (0..SIZE).rev().find(|&x| world.get(x, 0, z).is_some()).unwrap();
+        for y in -6..=0 {
+            world.set(edge_x + 1, y, z, Block::Water);
+        }
+        for step in 0..4 {
+            let y = -8 - step * 2 - (hash(z, step) % 2) as i32;
+            let dx = (hash(step, z) % 2) as i32;
+            world.set(edge_x + 1 + dx, y, z, Block::Droplet);
+        }
+    }
+}
+
+fn build_cabin(world: &mut World) {
+    let (x0, x1, z0, z1) = (14, 19, 3, 8);
+
+    for x in x0 + 1..x1 {
+        for z in z0 + 1..z1 {
+            world.set(x, 0, z, Block::OakPlanks);
+        }
+    }
+
+    for y in 1..=3 {
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                let on_x_wall = x == x0 || x == x1;
+                let on_z_wall = z == z0 || z == z1;
+                if !(on_x_wall || on_z_wall) {
+                    continue;
+                }
+                let block = if on_x_wall && on_z_wall {
+                    Block::OakLog
+                } else {
+                    Block::OakPlanks
+                };
+                world.set(x, y, z, block);
+            }
+        }
+    }
+
+    // Puerta hacia el camino y ventanas.
+    world.remove(15, 1, z1);
+    world.remove(15, 2, z1);
+    world.set(17, 2, z1, Block::Glass);
+    world.set(x1, 2, 5, Block::Glass);
+    world.set(x1, 2, 6, Block::Glass);
+
+    // Techo escalonado a dos aguas con alero.
+    for (y, from, to) in [(4, z0 - 1, z1 + 1), (5, z0, z1), (6, z0 + 1, z1 - 1), (7, z0 + 2, z1 - 2)] {
+        for x in x0 - 1..=x1 + 1 {
+            for z in from..=to {
+                world.set(x, y, z, Block::SprucePlanks);
+            }
+        }
+    }
+
+    for y in 1..=9 {
+        world.set(x0 + 1, y, z0 + 1, Block::StoneBricks);
+    }
+}
+
+fn build_farm(world: &mut World) {
+    for x in 16..=21 {
+        for z in 9..=14 {
+            let border = x == 16 || x == 21 || z == 9 || z == 14;
+            if border {
+                world.set(x, 1, z, Block::Fence);
+            } else {
+                world.set(x, 0, z, Block::Farmland);
+                world.set(x, 1, z, Block::Wheat);
+            }
+        }
+    }
+}
+
+fn build_paths(world: &mut World) {
+    for x in 14..=15 {
+        for z in 9..=13 {
+            world.set(x, 0, z, Block::DirtPath);
+        }
+    }
+    for x in 6..=9 {
+        for z in 18..=20 {
+            if world.get(x, 0, z).is_some() {
+                world.set(x, 0, z, Block::DirtPath);
+            }
+        }
+    }
+}
+
+fn build_bridge(world: &mut World) {
+    let (first, last) = (*RIVER_Z.start(), *RIVER_Z.end());
+    for x in 14..=15 {
+        world.set(x, 1, first - 1, Block::StoneSlab);
+        for z in RIVER_Z {
+            world.set(x, 1, z, Block::StoneBricks);
+        }
+        world.set(x, 1, last + 1, Block::StoneSlab);
+    }
+}
+
+fn build_tree(world: &mut World, x: i32, z: i32, base_y: i32, trunk: i32, radius: f32) {
+    for y in base_y..base_y + trunk {
+        world.set(x, y, z, Block::OakLog);
+    }
+
+    let top = base_y + trunk;
+    let r = radius.ceil() as i32;
+    for dx in -r..=r {
+        for dy in -r..=r {
+            for dz in -r..=r {
+                let dist = ((dx * dx) as f32 + (dy * dy) as f32 * 1.6 + (dz * dz) as f32).sqrt();
+                let ragged = (hash(x + dx * 3 + dy, z + dz * 5) % 3) as f32 * 0.35;
+                if dist + ragged <= radius + 0.3 {
+                    world.set_if_empty(x + dx, top + dy, z + dz, Block::Leaves);
+                }
+            }
+        }
+    }
+}
+
+fn build_vegetation(world: &mut World) {
+    let above_cliff = CLIFF_TOP + 1;
+    build_tree(world, 2, 10, above_cliff, 5, 3.0);
+    build_tree(world, 3, 4, above_cliff, 5, 2.8);
+    build_tree(world, 13, 3, 1, 8, 3.4);
+
+    for (x, z, height) in [(5, 14, 2), (6, 14, 1), (6, 15, 1), (5, 15, 1), (4, 16, 1)] {
+        if let Some(top) = world.top_y(x, z) {
+            for y in top + 1..=top + height {
+                world.set_if_empty(x, y, z, Block::Leaves);
+            }
+        }
+    }
+
+    for z in 2..=5 {
+        world.set(7, above_cliff, z, Block::Fence);
+    }
+    for x in 5..=6 {
+        world.set(x, above_cliff, 2, Block::Fence);
+    }
+}
+
+fn build_portal_cave(world: &mut World) {
+    let cave_x = 8..=16;
+    let walls: Vec<i32> = cave_x
+        .clone()
+        .map(|x| (0..SIZE).rev().find(|&z| world.get(x, -3, z).is_some()).unwrap())
+        .collect();
+    let back = walls.iter().min().unwrap() - 2;
+
+    for (x, wall) in cave_x.zip(&walls) {
+        for y in -5..=-2 {
+            for z in back + 1..=*wall {
+                world.remove(x, y, z);
+            }
+        }
+    }
+
+    let frame_z = back + 1;
+    for x in 11..=14 {
+        world.set(x, -6, frame_z, Block::Obsidian);
+        world.set(x, -1, frame_z, Block::Obsidian);
+    }
+    for y in -5..=-2 {
+        world.set(11, y, frame_z, Block::Obsidian);
+        world.set(14, y, frame_z, Block::Obsidian);
+        world.set(12, y, frame_z, Block::Portal);
+        world.set(13, y, frame_z, Block::Portal);
+    }
+    for x in 8..=16 {
+        world.set_if_empty(x, -6, frame_z, Block::Stone);
+    }
+
+    world.set(9, -3, frame_z, Block::Torch);
+}
+
+fn block_shapes(world: &World, block: Block, x: i32, y: i32, z: i32) -> Vec<(Vec3, Vec3)> {
+    let full = (Vec3::zeros(), Vec3::new(1.0, 1.0, 1.0));
+
+    match block {
+        Block::Water => {
+            let above = world.get(x, y + 1, z) == Some(Block::Water);
+            let below = world.get(x, y - 1, z) == Some(Block::Water);
+            if above || below {
+                vec![full]
+            } else {
+                vec![(Vec3::new(0.0, -0.1, 0.0), Vec3::new(1.0, 0.8, 1.0))]
+            }
+        }
+        Block::Droplet => {
+            let jitter = (hash(x, y) % 5) as f32 * 0.1 - 0.2;
+            vec![(Vec3::new(jitter, 0.0, -jitter), Vec3::new(0.3, 0.3, 0.3))]
+        }
+        Block::StoneSlab => vec![(Vec3::new(0.0, -0.25, 0.0), Vec3::new(1.0, 0.5, 1.0))],
+        Block::Torch => vec![(Vec3::new(0.0, -0.2, 0.0), Vec3::new(0.16, 0.6, 0.16))],
+        Block::Portal => vec![(Vec3::zeros(), Vec3::new(1.0, 1.0, 0.25))],
+        Block::Wheat => vec![(Vec3::new(0.0, -0.1, 0.0), Vec3::new(0.9, 0.8, 0.9))],
+        Block::Fence => {
+            let mut parts = vec![(Vec3::zeros(), Vec3::new(0.25, 1.0, 0.25))];
+            for (dx, dz) in [(1, 0), (0, 1)] {
+                if world.get(x + dx, y, z + dz) == Some(Block::Fence) {
+                    let size = Vec3::new(
+                        if dx == 1 { 1.0 } else { 0.12 },
+                        0.12,
+                        if dz == 1 { 1.0 } else { 0.12 },
+                    );
+                    for rail_y in [0.25, -0.1] {
+                        let offset = Vec3::new(dx as f32 * 0.5, rail_y, dz as f32 * 0.5);
+                        parts.push((offset, size));
+                    }
+                }
+            }
+            parts
+        }
+        _ => vec![full],
+    }
+}
+
+fn to_cubes(world: &World) -> Vec<Cube> {
+    let mut cubes = Vec::new();
+
+    for (&(x, y, z), &block) in &world.blocks {
+        let exposed = NEIGHBORS
+            .iter()
+            .any(|&(dx, dy, dz)| !world.is_opaque(x + dx, y + dy, z + dz));
+        if !exposed {
+            continue;
+        }
+
+        let (textures, material) = block.appearance();
+        let center = Vec3::new(x as f32 - CENTER, y as f32, z as f32 - CENTER);
+
+        for (offset, size) in block_shapes(world, block, x, y, z) {
+            cubes.push(Cube::new(center + offset, size, material, textures));
+        }
+    }
+
+    cubes
+}
+
+pub fn build_diorama() -> Scene {
+    let textures = TEXTURE_FILES
+        .iter()
+        .map(|name| Texture::from_bmp(&format!("assets/textures/{name}.bmp")))
+        .collect();
+
+    let mut world = World::new();
+    build_terrain(&mut world);
+    build_water(&mut world);
+    build_cabin(&mut world);
+    build_farm(&mut world);
+    build_paths(&mut world);
+    build_bridge(&mut world);
+    build_vegetation(&mut world);
+    build_portal_cave(&mut world);
+
+    Scene::new(to_cubes(&world), textures)
+}
