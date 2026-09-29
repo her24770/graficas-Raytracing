@@ -9,7 +9,7 @@ use crate::ray_intersect::{FaceTextures, Material};
 use crate::scene::{Ambient, Scene};
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 19] = [
+const TEXTURE_FILES: [&str; 34] = [
     "grass_block_top",
     "grass_block_side",
     "dirt",
@@ -29,7 +29,123 @@ const TEXTURE_FILES: [&str; 19] = [
     "nether_portal",
     "glowstone",
     "stripped_oak_log",
+    // Piel marina/exotica.
+    "sea_lantern",
+    "prismarine",
+    "prismarine_bricks",
+    "dark_prismarine",
+    "crying_obsidian",
+    "amethyst_block",
+    "sculk",
+    // Piel nevada.
+    "snow",
+    "ice",
+    // Piel desertica.
+    "sand",
+    "sandstone",
+    // Piel mesa.
+    "red_sand",
+    "orange_terracotta",
+    "yellow_terracotta",
+    "brown_terracotta",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Biome {
+    Overworld,
+    Marine,
+    Snow,
+    Desert,
+    Mesa,
+}
+
+impl Biome {
+    pub const ALL: [Biome; 5] = [
+        Biome::Overworld,
+        Biome::Marine,
+        Biome::Snow,
+        Biome::Desert,
+        Biome::Mesa,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Biome::Overworld => "Overworld",
+            Biome::Marine => "Marino",
+            Biome::Snow => "Nevado",
+            Biome::Desert => "Desertico",
+            Biome::Mesa => "Mesa",
+        }
+    }
+
+    // Color de acento, cuanto se mezcla en cielo/ambiente (0-1) y multiplicador
+    // de intensidad del sol. Es la "atmosfera" propia de cada bioma.
+    pub fn mood(self) -> (Color, f32, f32) {
+        match self {
+            Biome::Overworld => (Color::from_hex(0x000000), 0.0, 1.0),
+            Biome::Marine => (Color::from_hex(0x1E5A66), 0.35, 0.85),
+            Biome::Snow => (Color::from_hex(0x8FA8B8), 0.45, 0.7),
+            Biome::Desert => (Color::from_hex(0xFFE9A8), 0.3, 1.25),
+            Biome::Mesa => (Color::from_hex(0xC96A3D), 0.35, 1.05),
+        }
+    }
+}
+
+struct TerrainTextures {
+    top: usize,
+    side: usize,
+    dirt: usize,
+    stone: usize,
+    deepslate: usize,
+    water: usize,
+}
+
+// Solo el terreno (pasto/tierra/piedra/roca oscura/agua) cambia de piel; la
+// cabana, la granja, el puente y el portal se mantienen iguales en todos los biomas.
+fn terrain_textures(biome: Biome) -> TerrainTextures {
+    match biome {
+        Biome::Overworld => TerrainTextures {
+            top: tex("grass_block_top"),
+            side: tex("grass_block_side"),
+            dirt: tex("dirt"),
+            stone: tex("stone"),
+            deepslate: tex("deepslate"),
+            water: tex("water_still"),
+        },
+        Biome::Marine => TerrainTextures {
+            top: tex("sea_lantern"),
+            side: tex("prismarine"),
+            dirt: tex("dark_prismarine"),
+            stone: tex("prismarine_bricks"),
+            deepslate: tex("crying_obsidian"),
+            water: tex("water_still"),
+        },
+        Biome::Snow => TerrainTextures {
+            top: tex("snow"),
+            side: tex("snow"),
+            dirt: tex("dirt"),
+            stone: tex("stone"),
+            deepslate: tex("deepslate"),
+            water: tex("ice"),
+        },
+        Biome::Desert => TerrainTextures {
+            top: tex("sand"),
+            side: tex("sand"),
+            dirt: tex("sandstone"),
+            stone: tex("sandstone"),
+            deepslate: tex("deepslate"),
+            water: tex("water_still"),
+        },
+        Biome::Mesa => TerrainTextures {
+            top: tex("red_sand"),
+            side: tex("orange_terracotta"),
+            dirt: tex("orange_terracotta"),
+            stone: tex("yellow_terracotta"),
+            deepslate: tex("brown_terracotta"),
+            water: tex("water_still"),
+        },
+    }
+}
 
 const SIZE: i32 = 24;
 const CENTER: f32 = 11.5;
@@ -96,7 +212,8 @@ impl Block {
         )
     }
 
-    fn appearance(self) -> (FaceTextures, Material) {
+    fn appearance(self, biome: Biome) -> (FaceTextures, Material) {
+        let terrain = terrain_textures(biome);
         const SOIL: Material = Material::matte(0.03, 4.0);
         const ROCK: Material = Material::matte(0.12, 14.0);
         const WOOD: Material = Material::matte(0.08, 10.0);
@@ -134,23 +251,19 @@ impl Block {
 
         match self {
             Block::Grass => (
-                FaceTextures::top_side_bottom(
-                    tex("grass_block_top"),
-                    tex("grass_block_side"),
-                    tex("dirt"),
-                ),
+                FaceTextures::top_side_bottom(terrain.top, terrain.side, terrain.dirt),
                 Material::matte(0.05, 8.0),
             ),
-            Block::Dirt => (uniform("dirt"), SOIL),
-            Block::Stone => (uniform("stone"), ROCK),
-            Block::Deepslate => (uniform("deepslate"), ROCK),
+            Block::Dirt => (FaceTextures::uniform(terrain.dirt), SOIL),
+            Block::Stone => (FaceTextures::uniform(terrain.stone), ROCK),
+            Block::Deepslate => (FaceTextures::uniform(terrain.deepslate), ROCK),
             Block::StoneBricks | Block::StoneSlab => (uniform("stone_bricks"), ROCK),
             Block::OakLog => (uniform("oak_log"), WOOD),
             Block::StrippedOakLog => (uniform("stripped_oak_log"), WOOD),
             Block::OakPlanks | Block::Fence => (uniform("oak_planks"), WOOD),
             Block::SprucePlanks => (uniform("spruce_planks"), WOOD),
             Block::Leaves => (uniform("oak_leaves"), Material::matte(0.1, 18.0)),
-            Block::Water | Block::Droplet => (uniform("water_still"), WATER),
+            Block::Water | Block::Droplet => (FaceTextures::uniform(terrain.water), WATER),
             Block::DirtPath => (
                 FaceTextures::top_side_bottom(tex("dirt_path_top"), tex("dirt"), tex("dirt")),
                 SOIL,
@@ -702,7 +815,7 @@ fn face_occlusion(world: &World, position: [i32; 3], axis: usize, positive: bool
     corners
 }
 
-fn to_cubes(world: &World) -> Vec<Cube> {
+fn to_cubes(world: &World, biome: Biome) -> Vec<Cube> {
     let mut cubes = Vec::new();
 
     for (&(x, y, z), &block) in &world.blocks {
@@ -713,7 +826,7 @@ fn to_cubes(world: &World) -> Vec<Cube> {
             continue;
         }
 
-        let (textures, material) = block.appearance();
+        let (textures, material) = block.appearance(biome);
         let center = Vec3::new(x as f32 - CENTER, y as f32, z as f32 - CENTER);
 
         for (offset, size) in block_shapes(world, block, x, y, z) {
@@ -735,7 +848,7 @@ fn to_cubes(world: &World) -> Vec<Cube> {
     cubes
 }
 
-pub fn build_diorama() -> Scene {
+pub fn build_diorama(biome: Biome) -> Scene {
     let textures = TEXTURE_FILES
         .iter()
         .map(|name| Texture::from_bmp(&format!("assets/textures/{name}.bmp")))
@@ -761,5 +874,5 @@ pub fn build_diorama() -> Scene {
     let mut lights = vec![sun];
     lights.append(&mut world.lights);
 
-    Scene::new(to_cubes(&world), textures, lights, ambient, sky)
+    Scene::new(to_cubes(&world, biome), textures, lights, ambient, sky)
 }

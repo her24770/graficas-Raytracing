@@ -268,9 +268,21 @@ fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera, time: f
     });
 }
 
+fn apply_biome_mood(sun: &mut light::Light, ambient: &mut scene::Ambient, sky: &mut scene::SkyGradient, biome: diorama::Biome) {
+    let (accent, blend, intensity_scale) = biome.mood();
+    sun.color = Color::lerp(sun.color, accent, blend * 0.5);
+    sun.intensity *= intensity_scale;
+    ambient.sky = Color::lerp(ambient.sky, accent, blend);
+    ambient.ground = Color::lerp(ambient.ground, accent, blend);
+    sky.horizon = Color::lerp(sky.horizon, accent, blend);
+    sky.middle = Color::lerp(sky.middle, accent, blend);
+    sky.high = Color::lerp(sky.high, accent, blend);
+}
+
 fn main() {
     let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
-    let mut scene = diorama::build_diorama();
+    let mut current_biome = diorama::Biome::Overworld;
+    let mut scene = diorama::build_diorama(current_biome);
 
     let mut camera = Camera::new(
         Vec3::new(27.5, 21.0, 27.5),
@@ -278,14 +290,19 @@ fn main() {
         Vec3::new(0.0, 1.0, 0.0),
     );
 
-    // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos] [hora_0_a_1]`
+    // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos] [hora_0_a_1] [bioma_0_a_4]`
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 3 && args[1] == "--screenshot" {
         if let Some(steps) = args.get(3).and_then(|value| value.parse::<i32>().ok()) {
             camera.orbit(steps as f32 * ROTATION_SPEED, 0.0);
         }
+        if let Some(index) = args.get(5).and_then(|value| value.parse::<usize>().ok()) {
+            current_biome = diorama::Biome::ALL[index.min(4)];
+            scene = diorama::build_diorama(current_biome);
+        }
         if let Some(time_of_day) = args.get(4).and_then(|value| value.parse::<f32>().ok()) {
-            let (sun, ambient, sky) = daycycle::lighting_at(time_of_day);
+            let (mut sun, mut ambient, mut sky) = daycycle::lighting_at(time_of_day);
+            apply_biome_mood(&mut sun, &mut ambient, &mut sky, current_biome);
             scene.lights[0] = sun;
             scene.ambient = ambient;
             scene.sky = sky;
@@ -333,6 +350,21 @@ fn main() {
             auto_play = !auto_play;
         }
 
+        let biome_keys = [
+            (Key::Key1, diorama::Biome::Overworld),
+            (Key::Key2, diorama::Biome::Marine),
+            (Key::Key3, diorama::Biome::Snow),
+            (Key::Key4, diorama::Biome::Desert),
+            (Key::Key5, diorama::Biome::Mesa),
+        ];
+        for (key, biome) in biome_keys {
+            if window.is_key_pressed(key, KeyRepeat::No) && biome != current_biome {
+                current_biome = biome;
+                scene = diorama::build_diorama(current_biome);
+                println!("bioma: {}", current_biome.name());
+            }
+        }
+
         if auto_play {
             time_of_day += AUTO_TIME_STEP;
         }
@@ -344,7 +376,8 @@ fn main() {
         }
         time_of_day = time_of_day.rem_euclid(1.0);
 
-        let (sun, ambient, sky) = daycycle::lighting_at(time_of_day);
+        let (mut sun, mut ambient, mut sky) = daycycle::lighting_at(time_of_day);
+        apply_biome_mood(&mut sun, &mut ambient, &mut sky, current_biome);
         scene.lights[0] = sun;
         scene.ambient = ambient;
         scene.sky = sky;
