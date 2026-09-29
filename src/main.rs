@@ -25,6 +25,7 @@ const HEIGHT: usize = 600;
 
 const FOV: f32 = PI / 4.0;
 const ROTATION_SPEED: f32 = PI / 60.0;
+const ZOOM_SPEED: f32 = 0.985;
 
 const SHADOW_BIAS: f32 = 1e-3;
 const MAX_SHADOW_CROSSINGS: usize = 6;
@@ -319,6 +320,13 @@ fn main() {
             if window.is_key_down(key) {
                 camera.orbit(delta_yaw, delta_pitch);
             }
+        }
+
+        if window.is_key_down(Key::Equal) {
+            camera.zoom(ZOOM_SPEED);
+        }
+        if window.is_key_down(Key::Minus) {
+            camera.zoom(1.0 / ZOOM_SPEED);
         }
 
         if window.is_key_pressed(Key::T, KeyRepeat::No) {

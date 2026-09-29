@@ -2,6 +2,8 @@ use nalgebra_glm::Vec3;
 use std::f32::consts::PI;
 
 const PITCH_LIMIT: f32 = PI / 2.0 - 0.1;
+const MIN_RADIUS: f32 = 8.0;
+const MAX_RADIUS: f32 = 80.0;
 
 pub struct Camera {
     pub eye: Vec3,
@@ -43,5 +45,14 @@ impl Camera {
                 -radius * new_pitch.sin(),
                 radius * new_yaw.sin() * new_pitch.cos(),
             );
+    }
+
+    // factor < 1.0 acerca la camara, factor > 1.0 la aleja; el radio queda
+    // limitado para no meterse dentro de la isla ni alejarse hasta perderla de vista.
+    pub fn zoom(&mut self, factor: f32) {
+        let radius_vector = self.eye - self.center;
+        let radius = radius_vector.magnitude();
+        let new_radius = (radius * factor).clamp(MIN_RADIUS, MAX_RADIUS);
+        self.eye = self.center + radius_vector.normalize() * new_radius;
     }
 }
