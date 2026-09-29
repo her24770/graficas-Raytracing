@@ -3,18 +3,20 @@ mod color;
 mod cube;
 mod diorama;
 mod framebuffer;
+mod light;
 mod ray_intersect;
 mod scene;
 mod texture;
 
 use minifb::{Key, Window, WindowOptions};
-use nalgebra_glm::{normalize, Vec3};
+use nalgebra_glm::{dot, normalize, Vec3};
 use std::f32::consts::PI;
 use std::time::{Duration, Instant};
 
 use crate::camera::Camera;
 use crate::color::Color;
 use crate::framebuffer::Framebuffer;
+use crate::ray_intersect::Intersect;
 use crate::scene::Scene;
 
 const WIDTH: usize = 800;
@@ -22,6 +24,9 @@ const HEIGHT: usize = 600;
 
 const FOV: f32 = PI / 4.0;
 const ROTATION_SPEED: f32 = PI / 60.0;
+
+const SHADOW_BIAS: f32 = 1e-3;
+const MAX_SHADOW_CROSSINGS: usize = 6;
 
 const SKY_HORIZON_LOW: u32 = 0xF2B866;
 const SKY_MIDDLE: u32 = 0xDE8A6A;
@@ -36,17 +41,90 @@ fn sky_color(ray_direction: &Vec3) -> Color {
     }
 }
 
-// Sombreado fijo por orientacion de cara; se reemplaza por Phong en la etapa de iluminacion.
-fn face_shade(normal: &Vec3) -> f32 {
-    if normal.y > 0.5 {
-        1.0
-    } else if normal.y < -0.5 {
-        0.5
-    } else if normal.z.abs() > 0.5 {
-        0.82
-    } else {
-        0.66
+pub fn reflect(incident: &Vec3, normal: &Vec3) -> Vec3 {
+    incident - normal * (2.0 * dot(incident, normal))
+}
+
+// Fraccion de luz que llega desde la luz al punto: 0 en sombra, 1 sin obstaculos.
+// Los bloques emisivos no proyectan sombra y los transparentes dejan pasar parte de la luz.
+fn light_visibility(intersect: &Intersect, light_direction: &Vec3, light_distance: f32, scene: &Scene) -> f32 {
+    let mut origin = intersect.point + intersect.normal * SHADOW_BIAS;
+    let mut traveled = 0.0;
+    let mut visibility = 1.0;
+
+    for _ in 0..MAX_SHADOW_CROSSINGS {
+        let Some(blocker) = scene.trace(&origin, light_direction) else {
+            return visibility;
+        };
+
+        traveled += blocker.distance;
+        if traveled >= light_distance {
+            return visibility;
+        }
+
+        let material = blocker.material;
+        if material.emission <= 0.0 {
+            if material.transparency <= 0.0 {
+                return 0.0;
+            }
+            visibility *= material.transparency;
+        }
+
+        origin = blocker.point + light_direction * SHADOW_BIAS;
+        traveled += SHADOW_BIAS;
     }
+
+    visibility
+}
+
+fn shade(intersect: &Intersect, ray_origin: &Vec3, scene: &Scene) -> Color {
+    let material = intersect.material;
+    let base = scene.textures[intersect.texture_id]
+        .sample(intersect.u, intersect.v)
+        .to_vec3();
+    let view_direction = (ray_origin - intersect.point).normalize();
+
+    let hemisphere = intersect.normal.y * 0.5 + 0.5;
+    let ambient = scene.ambient.ground.to_vec3().lerp(&scene.ambient.sky.to_vec3(), hemisphere)
+        * scene.ambient.intensity;
+
+    let mut diffuse = Vec3::zeros();
+    let mut specular = Vec3::zeros();
+
+    for light in &scene.lights {
+        let to_light = light.position - intersect.point;
+        let light_distance = to_light.magnitude();
+        if light_distance >= light.range {
+            continue;
+        }
+
+        let light_direction = to_light / light_distance;
+        let lambert = dot(&intersect.normal, &light_direction);
+        if lambert <= 0.0 {
+            continue;
+        }
+
+        let strength = light.intensity
+            * light.attenuation(light_distance)
+            * light_visibility(intersect, &light_direction, light_distance, scene);
+        if strength <= 0.0 {
+            continue;
+        }
+
+        let light_color = light.color.to_vec3() * strength;
+        diffuse += light_color * lambert;
+
+        let reflect_direction = reflect(&-light_direction, &intersect.normal);
+        let highlight = dot(&view_direction, &reflect_direction)
+            .max(0.0)
+            .powf(material.specular_exponent);
+        specular += light_color * (highlight * material.specular);
+    }
+
+    let lit = (ambient + diffuse * material.diffuse) * intersect.ambient_occlusion;
+    let color = base.component_mul(&lit) + specular + base * material.emission;
+
+    Color::from_vec3(color)
 }
 
 fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene) -> Color {
@@ -54,8 +132,7 @@ fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene) -> Color {
         return sky_color(ray_direction);
     };
 
-    let texture = &scene.textures[intersect.texture_id];
-    texture.sample(intersect.u, intersect.v) * face_shade(&intersect.normal)
+    shade(&intersect, ray_origin, scene)
 }
 
 fn render_band(

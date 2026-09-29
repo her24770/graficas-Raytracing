@@ -4,6 +4,7 @@ use nalgebra_glm::Vec3;
 pub struct Material {
     pub diffuse: f32,
     pub specular: f32,
+    pub specular_exponent: f32,
     pub reflectivity: f32,
     pub transparency: f32,
     pub refractive_index: f32,
@@ -11,21 +12,15 @@ pub struct Material {
 }
 
 impl Material {
-    pub fn new(
-        diffuse: f32,
-        specular: f32,
-        reflectivity: f32,
-        transparency: f32,
-        refractive_index: f32,
-        emission: f32,
-    ) -> Self {
+    pub const fn matte(specular: f32, specular_exponent: f32) -> Self {
         Material {
-            diffuse,
+            diffuse: 0.9,
             specular,
-            reflectivity,
-            transparency,
-            refractive_index,
-            emission,
+            specular_exponent,
+            reflectivity: 0.0,
+            transparency: 0.0,
+            refractive_index: 1.0,
+            emission: 0.0,
         }
     }
 }
@@ -59,6 +54,7 @@ pub struct Intersect {
     pub u: f32,
     pub v: f32,
     pub texture_id: usize,
+    pub ambient_occlusion: f32,
     pub material: Material,
 }
 

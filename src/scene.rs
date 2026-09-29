@@ -1,4 +1,6 @@
+use crate::color::Color;
 use crate::cube::Cube;
+use crate::light::Light;
 use crate::ray_intersect::{Intersect, RayIntersect};
 use crate::texture::Texture;
 use nalgebra_glm::Vec3;
@@ -6,9 +8,19 @@ use nalgebra_glm::Vec3;
 const EPSILON: f32 = 1e-4;
 const CELL_SIZE: f32 = 1.0;
 
+// Luz ambiente hemisferica: las caras que miran arriba reciben el tono del cielo
+// y las que miran abajo el rebote calido del suelo.
+pub struct Ambient {
+    pub sky: Color,
+    pub ground: Color,
+    pub intensity: f32,
+}
+
 pub struct Scene {
     pub cubes: Vec<Cube>,
     pub textures: Vec<Texture>,
+    pub lights: Vec<Light>,
+    pub ambient: Ambient,
     bounds_min: Vec3,
     bounds_max: Vec3,
     dims: [usize; 3],
@@ -16,7 +28,12 @@ pub struct Scene {
 }
 
 impl Scene {
-    pub fn new(cubes: Vec<Cube>, textures: Vec<Texture>) -> Self {
+    pub fn new(
+        cubes: Vec<Cube>,
+        textures: Vec<Texture>,
+        lights: Vec<Light>,
+        ambient: Ambient,
+    ) -> Self {
         let mut bounds_min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
         let mut bounds_max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
 
@@ -50,6 +67,8 @@ impl Scene {
         Scene {
             cubes,
             textures,
+            lights,
+            ambient,
             bounds_min,
             bounds_max,
             dims,

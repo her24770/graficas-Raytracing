@@ -2,9 +2,11 @@ use std::collections::HashMap;
 
 use nalgebra_glm::Vec3;
 
-use crate::cube::Cube;
+use crate::color::Color;
+use crate::cube::{face_index, face_tangent_axes, Cube};
+use crate::light::Light;
 use crate::ray_intersect::{FaceTextures, Material};
-use crate::scene::Scene;
+use crate::scene::{Ambient, Scene};
 use crate::texture::Texture;
 
 const TEXTURE_FILES: [&str; 18] = [
@@ -69,6 +71,7 @@ enum Block {
     Obsidian,
     Portal,
     Torch,
+    Lantern,
     Fence,
 }
 
@@ -81,6 +84,7 @@ impl Block {
                 | Block::Glass
                 | Block::Portal
                 | Block::Torch
+                | Block::Lantern
                 | Block::Fence
                 | Block::Wheat
                 | Block::StoneSlab
@@ -88,8 +92,38 @@ impl Block {
     }
 
     fn appearance(self) -> (FaceTextures, Material) {
-        let opaque = Material::new(0.9, 0.1, 0.0, 0.0, 1.0, 0.0);
-        let water = Material::new(0.3, 0.5, 0.3, 0.6, 1.33, 0.0);
+        const SOIL: Material = Material::matte(0.03, 4.0);
+        const ROCK: Material = Material::matte(0.12, 14.0);
+        const WOOD: Material = Material::matte(0.08, 10.0);
+        const WATER: Material = Material {
+            diffuse: 0.7,
+            reflectivity: 0.3,
+            transparency: 0.6,
+            refractive_index: 1.33,
+            ..Material::matte(0.9, 150.0)
+        };
+        const GLASS: Material = Material {
+            diffuse: 0.3,
+            reflectivity: 0.05,
+            transparency: 0.9,
+            refractive_index: 1.5,
+            ..Material::matte(0.8, 200.0)
+        };
+        const OBSIDIAN: Material = Material {
+            reflectivity: 0.1,
+            ..Material::matte(0.6, 80.0)
+        };
+        const PORTAL: Material = Material {
+            reflectivity: 0.1,
+            transparency: 0.3,
+            emission: 0.9,
+            ..Material::matte(0.2, 30.0)
+        };
+        const GLOW: Material = Material {
+            emission: 1.0,
+            ..Material::matte(0.0, 1.0)
+        };
+
         let uniform = |name: &str| FaceTextures::uniform(tex(name));
 
         match self {
@@ -99,46 +133,52 @@ impl Block {
                     tex("grass_block_side"),
                     tex("dirt"),
                 ),
-                opaque,
+                Material::matte(0.05, 8.0),
             ),
-            Block::Dirt => (uniform("dirt"), opaque),
-            Block::Stone => (uniform("stone"), opaque),
-            Block::Deepslate => (uniform("deepslate"), opaque),
-            Block::StoneBricks | Block::StoneSlab => (uniform("stone_bricks"), opaque),
-            Block::OakLog => (uniform("oak_log"), opaque),
-            Block::OakPlanks | Block::Fence => (uniform("oak_planks"), opaque),
-            Block::SprucePlanks => (uniform("spruce_planks"), opaque),
-            Block::Leaves => (uniform("oak_leaves"), opaque),
-            Block::Water | Block::Droplet => (uniform("water_still"), water),
+            Block::Dirt => (uniform("dirt"), SOIL),
+            Block::Stone => (uniform("stone"), ROCK),
+            Block::Deepslate => (uniform("deepslate"), ROCK),
+            Block::StoneBricks | Block::StoneSlab => (uniform("stone_bricks"), ROCK),
+            Block::OakLog => (uniform("oak_log"), WOOD),
+            Block::OakPlanks | Block::Fence => (uniform("oak_planks"), WOOD),
+            Block::SprucePlanks => (uniform("spruce_planks"), WOOD),
+            Block::Leaves => (uniform("oak_leaves"), Material::matte(0.1, 18.0)),
+            Block::Water | Block::Droplet => (uniform("water_still"), WATER),
             Block::DirtPath => (
                 FaceTextures::top_side_bottom(tex("dirt_path_top"), tex("dirt"), tex("dirt")),
-                opaque,
+                SOIL,
             ),
             Block::Farmland => (
                 FaceTextures::top_side_bottom(tex("farmland"), tex("dirt"), tex("dirt")),
-                opaque,
+                SOIL,
             ),
-            Block::Wheat => (uniform("wheat_stage7"), opaque),
-            Block::Glass => (uniform("glass"), Material::new(0.2, 0.6, 0.05, 0.9, 1.5, 0.0)),
-            Block::Obsidian => (uniform("obsidian"), Material::new(0.8, 0.4, 0.1, 0.0, 1.0, 0.0)),
-            Block::Portal => (
-                uniform("nether_portal"),
-                Material::new(0.7, 0.1, 0.1, 0.3, 1.0, 0.8),
-            ),
-            Block::Torch => (uniform("glowstone"), Material::new(0.9, 0.0, 0.0, 0.0, 1.0, 1.0)),
+            Block::Wheat => (uniform("wheat_stage7"), Material::matte(0.05, 6.0)),
+            Block::Glass => (uniform("glass"), GLASS),
+            Block::Obsidian => (uniform("obsidian"), OBSIDIAN),
+            Block::Portal => (uniform("nether_portal"), PORTAL),
+            Block::Torch | Block::Lantern => (uniform("glowstone"), GLOW),
         }
     }
 }
 
 struct World {
     blocks: HashMap<(i32, i32, i32), Block>,
+    lights: Vec<Light>,
 }
 
 impl World {
     fn new() -> Self {
         World {
             blocks: HashMap::new(),
+            lights: Vec::new(),
         }
+    }
+
+    // Recibe coordenadas de bloque; las luces quedan en coordenadas de escena.
+    fn add_light(&mut self, block_position: Vec3, color: u32, intensity: f32, range: f32) {
+        let position = block_position - Vec3::new(CENTER, 0.0, CENTER);
+        self.lights
+            .push(Light::new(position, Color::from_hex(color), intensity, range));
     }
 
     fn get(&self, x: i32, y: i32, z: i32) -> Option<Block> {
@@ -451,6 +491,31 @@ fn build_portal_cave(world: &mut World) {
     }
 
     world.set(9, -3, frame_z, Block::Torch);
+
+    let front = frame_z as f32 + 0.6;
+    world.add_light(Vec3::new(9.0, -2.9, front), 0xFFAA50, 1.6, 6.0);
+    world.add_light(Vec3::new(12.5, -3.5, front), 0xAA46FF, 1.8, 7.0);
+}
+
+fn build_lanterns(world: &mut World) {
+    for (x, z) in [(13, 9), (16, 18)] {
+        let Some(ground) = world.top_y(x, z) else {
+            continue;
+        };
+        world.set(x, ground + 1, z, Block::Fence);
+        world.set(x, ground + 2, z, Block::Fence);
+        world.set(x, ground + 3, z, Block::Lantern);
+        world.add_light(
+            Vec3::new(x as f32, ground as f32 + 2.8, z as f32),
+            0xFFBE6E,
+            1.4,
+            7.0,
+        );
+    }
+
+    // Lampara dentro de la cabana: su luz sale por la puerta.
+    world.set(16, 3, 5, Block::Lantern);
+    world.add_light(Vec3::new(16.0, 2.8, 5.0), 0xFFB060, 1.5, 6.0);
 }
 
 fn block_shapes(world: &World, block: Block, x: i32, y: i32, z: i32) -> Vec<(Vec3, Vec3)> {
@@ -472,6 +537,7 @@ fn block_shapes(world: &World, block: Block, x: i32, y: i32, z: i32) -> Vec<(Vec
         }
         Block::StoneSlab => vec![(Vec3::new(0.0, -0.25, 0.0), Vec3::new(1.0, 0.5, 1.0))],
         Block::Torch => vec![(Vec3::new(0.0, -0.2, 0.0), Vec3::new(0.16, 0.6, 0.16))],
+        Block::Lantern => vec![(Vec3::new(0.0, -0.25, 0.0), Vec3::new(0.4, 0.45, 0.4))],
         Block::Portal => vec![(Vec3::zeros(), Vec3::new(1.0, 1.0, 0.25))],
         Block::Wheat => vec![(Vec3::new(0.0, -0.1, 0.0), Vec3::new(0.9, 0.8, 0.9))],
         Block::Fence => {
@@ -495,6 +561,40 @@ fn block_shapes(world: &World, block: Block, x: i32, y: i32, z: i32) -> Vec<(Vec
     }
 }
 
+const OCCLUSION_LEVELS: [f32; 4] = [1.0, 0.78, 0.6, 0.45];
+
+// Oclusion por esquina al estilo de la iluminacion suave de Minecraft: una esquina
+// se oscurece segun cuantos de sus tres vecinos frente a la cara estan ocupados.
+fn face_occlusion(world: &World, position: [i32; 3], axis: usize, positive: bool) -> [f32; 4] {
+    let mut front = position;
+    front[axis] += if positive { 1 } else { -1 };
+
+    let (b, c) = face_tangent_axes(axis);
+    let solid = |offset_b: i32, offset_c: i32| {
+        let mut cell = front;
+        cell[b] += offset_b;
+        cell[c] += offset_c;
+        world.is_opaque(cell[0], cell[1], cell[2])
+    };
+
+    let mut corners = [1.0; 4];
+    for j in 0..2 {
+        for i in 0..2 {
+            let db = if i == 0 { -1 } else { 1 };
+            let dc = if j == 0 { -1 } else { 1 };
+            let side_b = solid(db, 0);
+            let side_c = solid(0, dc);
+            let level = if side_b && side_c {
+                3
+            } else {
+                side_b as usize + side_c as usize + solid(db, dc) as usize
+            };
+            corners[i + 2 * j] = OCCLUSION_LEVELS[level];
+        }
+    }
+    corners
+}
+
 fn to_cubes(world: &World) -> Vec<Cube> {
     let mut cubes = Vec::new();
 
@@ -510,7 +610,18 @@ fn to_cubes(world: &World) -> Vec<Cube> {
         let center = Vec3::new(x as f32 - CENTER, y as f32, z as f32 - CENTER);
 
         for (offset, size) in block_shapes(world, block, x, y, z) {
-            cubes.push(Cube::new(center + offset, size, material, textures));
+            let mut cube = Cube::new(center + offset, size, material, textures);
+
+            if block.is_opaque_full() {
+                for axis in 0..3 {
+                    for positive in [false, true] {
+                        cube.ambient_occlusion[face_index(axis, positive)] =
+                            face_occlusion(world, [x, y, z], axis, positive);
+                    }
+                }
+            }
+
+            cubes.push(cube);
         }
     }
 
@@ -532,6 +643,23 @@ pub fn build_diorama() -> Scene {
     build_bridge(&mut world);
     build_vegetation(&mut world);
     build_portal_cave(&mut world);
+    build_lanterns(&mut world);
 
-    Scene::new(to_cubes(&world), textures)
+    // Sol de atardecer bajo y calido, entrando por el lado izquierdo de la vista principal.
+    let sun_direction = Vec3::new(-0.3, 0.6, 0.75).normalize();
+    let mut lights = vec![Light::new(
+        sun_direction * 1000.0,
+        Color::from_hex(0xFFDCB4),
+        1.2,
+        f32::INFINITY,
+    )];
+    lights.append(&mut world.lights);
+
+    let ambient = Ambient {
+        sky: Color::from_hex(0x9696CD),
+        ground: Color::from_hex(0xB48C6E),
+        intensity: 0.6,
+    };
+
+    Scene::new(to_cubes(&world), textures, lights, ambient)
 }

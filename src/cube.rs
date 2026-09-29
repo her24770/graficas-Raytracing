@@ -8,6 +8,21 @@ pub struct Cube {
     pub max: Vec3,
     pub material: Material,
     pub textures: FaceTextures,
+    // Oclusion ambiental por cara (indice eje*2 + lado positivo) y por esquina
+    // (indice i + 2j sobre los otros dos ejes en orden ascendente).
+    pub ambient_occlusion: [[f32; 4]; 6],
+}
+
+pub fn face_index(axis: usize, positive: bool) -> usize {
+    axis * 2 + positive as usize
+}
+
+pub fn face_tangent_axes(axis: usize) -> (usize, usize) {
+    match axis {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    }
 }
 
 impl Cube {
@@ -18,7 +33,19 @@ impl Cube {
             max: center + half,
             material,
             textures,
+            ambient_occlusion: [[1.0; 4]; 6],
         }
+    }
+
+    fn occlusion_at(&self, point: &Vec3, axis: usize, sign: f32) -> f32 {
+        let corners = self.ambient_occlusion[face_index(axis, sign > 0.0)];
+        let (b, c) = face_tangent_axes(axis);
+        let s = ((point[b] - self.min[b]) / (self.max[b] - self.min[b])).clamp(0.0, 1.0);
+        let t = ((point[c] - self.min[c]) / (self.max[c] - self.min[c])).clamp(0.0, 1.0);
+
+        let low = corners[0] + (corners[1] - corners[0]) * s;
+        let high = corners[2] + (corners[3] - corners[2]) * s;
+        low + (high - low) * t
     }
 
     fn face_uv(&self, point: &Vec3, axis: usize, sign: f32) -> (f32, f32) {
@@ -119,6 +146,7 @@ impl RayIntersect for Cube {
             u,
             v,
             texture_id,
+            ambient_occlusion: self.occlusion_at(&point, axis, sign),
             material: self.material,
         })
     }

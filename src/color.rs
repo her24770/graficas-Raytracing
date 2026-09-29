@@ -1,3 +1,4 @@
+use nalgebra_glm::Vec3;
 use std::fmt;
 use std::ops::{Add, Mul};
 
@@ -18,6 +19,19 @@ impl Color {
             r: ((hex >> 16) & 0xFF) as u8,
             g: ((hex >> 8) & 0xFF) as u8,
             b: (hex & 0xFF) as u8,
+        }
+    }
+
+    pub fn to_vec3(self) -> Vec3 {
+        Vec3::new(self.r as f32, self.g as f32, self.b as f32) / 255.0
+    }
+
+    pub fn from_vec3(value: Vec3) -> Self {
+        let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        Color {
+            r: channel(value.x),
+            g: channel(value.y),
+            b: channel(value.z),
         }
     }
 
