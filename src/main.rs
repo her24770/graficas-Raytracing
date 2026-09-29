@@ -1,6 +1,7 @@
 mod camera;
 mod color;
 mod cube;
+mod daycycle;
 mod diorama;
 mod framebuffer;
 mod light;
@@ -8,7 +9,7 @@ mod ray_intersect;
 mod scene;
 mod texture;
 
-use minifb::{Key, Window, WindowOptions};
+use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use nalgebra_glm::{dot, normalize, Vec3};
 use std::f32::consts::PI;
 use std::time::{Duration, Instant};
@@ -28,16 +29,17 @@ const ROTATION_SPEED: f32 = PI / 60.0;
 const SHADOW_BIAS: f32 = 1e-3;
 const MAX_SHADOW_CROSSINGS: usize = 6;
 
-const SKY_HORIZON_LOW: u32 = 0xF2B866;
-const SKY_MIDDLE: u32 = 0xDE8A6A;
-const SKY_HIGH: u32 = 0x6E5A8C;
+// Fraccion del dia completo que avanza cada tick del bucle principal.
+const AUTO_TIME_STEP: f32 = 0.00035;
+const MANUAL_TIME_STEP: f32 = 0.003;
+const START_TIME_OF_DAY: f32 = 0.78;
 
-fn sky_color(ray_direction: &Vec3) -> Color {
+fn sky_color(ray_direction: &Vec3, sky: &crate::scene::SkyGradient) -> Color {
     let t = ((ray_direction.y + 1.0) / 1.2).clamp(0.0, 1.0);
     if t < 0.5 {
-        Color::lerp(Color::from_hex(SKY_HORIZON_LOW), Color::from_hex(SKY_MIDDLE), t / 0.5)
+        Color::lerp(sky.horizon, sky.middle, t / 0.5)
     } else {
-        Color::lerp(Color::from_hex(SKY_MIDDLE), Color::from_hex(SKY_HIGH), (t - 0.5) / 0.5)
+        Color::lerp(sky.middle, sky.high, (t - 0.5) / 0.5)
     }
 }
 
@@ -77,11 +79,14 @@ fn light_visibility(intersect: &Intersect, light_direction: &Vec3, light_distanc
     visibility
 }
 
-fn shade(intersect: &Intersect, ray_origin: &Vec3, scene: &Scene) -> Color {
+fn shade(intersect: &Intersect, ray_origin: &Vec3, scene: &Scene, time: f32) -> Color {
     let material = intersect.material;
-    let base = scene.textures[intersect.texture_id]
-        .sample(intersect.u, intersect.v)
-        .to_vec3();
+    let (u, v) = if material.animated {
+        (intersect.u + time * 0.06, intersect.v + time * 0.035)
+    } else {
+        (intersect.u, intersect.v)
+    };
+    let base = scene.textures[intersect.texture_id].sample(u, v).to_vec3();
     let view_direction = (ray_origin - intersect.point).normalize();
 
     let hemisphere = intersect.normal.y * 0.5 + 0.5;
@@ -127,12 +132,12 @@ fn shade(intersect: &Intersect, ray_origin: &Vec3, scene: &Scene) -> Color {
     Color::from_vec3(color)
 }
 
-fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene) -> Color {
+fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene, time: f32) -> Color {
     let Some(intersect) = scene.trace(ray_origin, ray_direction) else {
-        return sky_color(ray_direction);
+        return sky_color(ray_direction, &scene.sky);
     };
 
-    shade(&intersect, ray_origin, scene)
+    shade(&intersect, ray_origin, scene, time)
 }
 
 fn render_band(
@@ -142,6 +147,7 @@ fn render_band(
     height: usize,
     scene: &Scene,
     camera: &Camera,
+    time: f32,
 ) {
     let width_f = width as f32;
     let height_f = height as f32;
@@ -163,12 +169,12 @@ fn render_band(
             let ray_direction = normalize(&Vec3::new(screen_x, screen_y, -1.0));
             let ray_direction = camera.basis_change(&ray_direction);
 
-            band[local_y * width + x] = cast_ray(&camera.eye, &ray_direction, scene).to_hex();
+            band[local_y * width + x] = cast_ray(&camera.eye, &ray_direction, scene, time).to_hex();
         }
     }
 }
 
-fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera) {
+fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera, time: f32) {
     let width = framebuffer.width;
     let height = framebuffer.height;
 
@@ -185,7 +191,7 @@ fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera) {
         {
             let y_offset = index * rows_per_band;
             scope.spawn(move || {
-                render_band(band, y_offset, width, height, scene, camera);
+                render_band(band, y_offset, width, height, scene, camera, time);
             });
         }
     });
@@ -193,7 +199,7 @@ fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera) {
 
 fn main() {
     let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
-    let scene = diorama::build_diorama();
+    let mut scene = diorama::build_diorama();
 
     let mut camera = Camera::new(
         Vec3::new(27.5, 21.0, 27.5),
@@ -201,14 +207,20 @@ fn main() {
         Vec3::new(0.0, 1.0, 0.0),
     );
 
-    // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos]`
+    // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos] [hora_0_a_1]`
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 3 && args[1] == "--screenshot" {
         if let Some(steps) = args.get(3).and_then(|value| value.parse::<i32>().ok()) {
             camera.orbit(steps as f32 * ROTATION_SPEED, 0.0);
         }
+        if let Some(time_of_day) = args.get(4).and_then(|value| value.parse::<f32>().ok()) {
+            let (sun, ambient, sky) = daycycle::lighting_at(time_of_day);
+            scene.lights[0] = sun;
+            scene.ambient = ambient;
+            scene.sky = sky;
+        }
         let start = Instant::now();
-        render(&mut framebuffer, &scene, &camera);
+        render(&mut framebuffer, &scene, &camera, 0.0);
         println!("{} cubos, render en {:?}", scene.cubes.len(), start.elapsed());
         framebuffer
             .save_bmp(&args[2])
@@ -220,7 +232,10 @@ fn main() {
         .expect("no se pudo crear la ventana");
 
     let frame_delay = Duration::from_millis(16);
-    let mut camera_moved = true;
+
+    let mut time_of_day = START_TIME_OF_DAY;
+    let mut auto_play = true;
+    let clock = Instant::now();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let orbit = [
@@ -233,14 +248,32 @@ fn main() {
         for (key, delta_yaw, delta_pitch) in orbit {
             if window.is_key_down(key) {
                 camera.orbit(delta_yaw, delta_pitch);
-                camera_moved = true;
             }
         }
 
-        if camera_moved {
-            render(&mut framebuffer, &scene, &camera);
-            camera_moved = false;
+        if window.is_key_pressed(Key::T, KeyRepeat::No) {
+            auto_play = !auto_play;
         }
+
+        if auto_play {
+            time_of_day += AUTO_TIME_STEP;
+        }
+        if window.is_key_down(Key::Comma) {
+            time_of_day -= MANUAL_TIME_STEP;
+        }
+        if window.is_key_down(Key::Period) {
+            time_of_day += MANUAL_TIME_STEP;
+        }
+        time_of_day = time_of_day.rem_euclid(1.0);
+
+        let (sun, ambient, sky) = daycycle::lighting_at(time_of_day);
+        scene.lights[0] = sun;
+        scene.ambient = ambient;
+        scene.sky = sky;
+
+        // Se redibuja siempre (camara, ciclo del dia y agua en movimiento lo requieren);
+        // el presupuesto de tiempo por frame sobra de sobra con la grilla de aceleracion.
+        render(&mut framebuffer, &scene, &camera, clock.elapsed().as_secs_f32());
 
         window
             .update_with_buffer(&framebuffer.buffer, WIDTH, HEIGHT)

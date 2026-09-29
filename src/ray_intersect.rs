@@ -9,6 +9,8 @@ pub struct Material {
     pub transparency: f32,
     pub refractive_index: f32,
     pub emission: f32,
+    // Si es true, la textura se desliza con el tiempo (solo lo usa el agua por ahora).
+    pub animated: bool,
 }
 
 impl Material {
@@ -21,6 +23,7 @@ impl Material {
             transparency: 0.0,
             refractive_index: 1.0,
             emission: 0.0,
+            animated: false,
         }
     }
 }

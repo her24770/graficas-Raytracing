@@ -16,11 +16,19 @@ pub struct Ambient {
     pub intensity: f32,
 }
 
+// Degradado del fondo (no geometria) segun la altura del rayo: horizonte, medio y cenit.
+pub struct SkyGradient {
+    pub horizon: Color,
+    pub middle: Color,
+    pub high: Color,
+}
+
 pub struct Scene {
     pub cubes: Vec<Cube>,
     pub textures: Vec<Texture>,
     pub lights: Vec<Light>,
     pub ambient: Ambient,
+    pub sky: SkyGradient,
     bounds_min: Vec3,
     bounds_max: Vec3,
     dims: [usize; 3],
@@ -33,6 +41,7 @@ impl Scene {
         textures: Vec<Texture>,
         lights: Vec<Light>,
         ambient: Ambient,
+        sky: SkyGradient,
     ) -> Self {
         let mut bounds_min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
         let mut bounds_max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
@@ -69,6 +78,7 @@ impl Scene {
             textures,
             lights,
             ambient,
+            sky,
             bounds_min,
             bounds_max,
             dims,

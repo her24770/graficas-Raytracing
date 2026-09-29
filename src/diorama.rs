@@ -9,7 +9,7 @@ use crate::ray_intersect::{FaceTextures, Material};
 use crate::scene::{Ambient, Scene};
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 18] = [
+const TEXTURE_FILES: [&str; 19] = [
     "grass_block_top",
     "grass_block_side",
     "dirt",
@@ -28,11 +28,15 @@ const TEXTURE_FILES: [&str; 18] = [
     "obsidian",
     "nether_portal",
     "glowstone",
+    "stripped_oak_log",
 ];
 
 const SIZE: i32 = 24;
 const CENTER: f32 = 11.5;
-const RADIUS: f32 = 11.5;
+// Franja extra de terreno agregada simetricamente alrededor de la isla original,
+// sin mover ninguna estructura ya ubicada (cabana, granja, arboles, cueva).
+const PAD: i32 = 5;
+const RADIUS: f32 = 11.5 + PAD as f32;
 
 const NEIGHBORS: [(i32, i32, i32); 6] = [
     (1, 0, 0),
@@ -73,6 +77,7 @@ enum Block {
     Torch,
     Lantern,
     Fence,
+    StrippedOakLog,
 }
 
 impl Block {
@@ -100,6 +105,7 @@ impl Block {
             reflectivity: 0.3,
             transparency: 0.6,
             refractive_index: 1.33,
+            animated: true,
             ..Material::matte(0.9, 150.0)
         };
         const GLASS: Material = Material {
@@ -140,6 +146,7 @@ impl Block {
             Block::Deepslate => (uniform("deepslate"), ROCK),
             Block::StoneBricks | Block::StoneSlab => (uniform("stone_bricks"), ROCK),
             Block::OakLog => (uniform("oak_log"), WOOD),
+            Block::StrippedOakLog => (uniform("stripped_oak_log"), WOOD),
             Block::OakPlanks | Block::Fence => (uniform("oak_planks"), WOOD),
             Block::SprucePlanks => (uniform("spruce_planks"), WOOD),
             Block::Leaves => (uniform("oak_leaves"), Material::matte(0.1, 18.0)),
@@ -258,8 +265,8 @@ fn is_river(x: i32, z: i32) -> bool {
 }
 
 fn build_terrain(world: &mut World) {
-    for x in 0..SIZE {
-        for z in 0..SIZE {
+    for x in -PAD..SIZE + PAD {
+        for z in -PAD..SIZE + PAD {
             let q = edge_distance(x, z);
             if q > 1.0 {
                 continue;
@@ -287,8 +294,8 @@ fn build_terrain(world: &mut World) {
 }
 
 fn build_water(world: &mut World) {
-    for x in 0..SIZE {
-        for z in 0..SIZE {
+    for x in -PAD..SIZE + PAD {
+        for z in -PAD..SIZE + PAD {
             if is_river(x, z) && world.get(x, 0, z).is_some() && surface_height(x, z) == 0 {
                 world.set(x, 0, z, Block::Water);
                 world.set(x, -1, z, Block::Dirt);
@@ -317,7 +324,7 @@ fn build_water(world: &mut World) {
 
     // El rio cae por el borde este y se deshace en gotas.
     for z in RIVER_Z {
-        let edge_x = (0..SIZE).rev().find(|&x| world.get(x, 0, z).is_some()).unwrap();
+        let edge_x = (-PAD..SIZE + PAD).rev().find(|&x| world.get(x, 0, z).is_some()).unwrap();
         for y in -6..=0 {
             world.set(edge_x + 1, y, z, Block::Water);
         }
@@ -417,6 +424,89 @@ fn build_bridge(world: &mut World) {
     }
 }
 
+fn build_dock(world: &mut World) {
+    for x in 11..=13 {
+        world.set(x, 0, 8, Block::OakPlanks);
+    }
+    world.set(11, -1, 8, Block::StrippedOakLog);
+    world.set(11, -2, 8, Block::StrippedOakLog);
+}
+
+// Pequeno pozo/mirador cubierto junto al camino, estructura nueva (no solo relleno).
+fn build_well(world: &mut World) {
+    let (x0, z0) = (12, 13);
+    for dx in 0..=1 {
+        for dz in 0..=1 {
+            world.set(x0 + dx, 0, z0 + dz, Block::StoneBricks);
+        }
+    }
+    for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        for y in 1..=3 {
+            world.set(x0 + dx, y, z0 + dz, Block::OakLog);
+        }
+    }
+    for dx in 0..=1 {
+        for dz in 0..=1 {
+            world.set(x0 + dx, 4, z0 + dz, Block::SprucePlanks);
+        }
+    }
+}
+
+// Torre mirador con baranda (vallas) arriba, sobre el pasto nuevo del borde.
+fn build_watchtower(world: &mut World, x: i32, z: i32) {
+    let Some(ground) = world.top_y(x, z) else {
+        return;
+    };
+
+    for y in ground + 1..=ground + 6 {
+        world.set(x, y, z, Block::StoneBricks);
+    }
+
+    let platform_y = ground + 7;
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            world.set(x + dx, platform_y, z + dz, Block::StoneBricks);
+        }
+    }
+
+    let rail_y = platform_y + 1;
+    for dx in -1i32..=1 {
+        for dz in -1i32..=1 {
+            if dx == 0 && dz == 0 {
+                continue;
+            }
+            if dx.abs() == 1 && dz.abs() == 1 {
+                continue;
+            }
+            world.set(x + dx, rail_y, z + dz, Block::Fence);
+        }
+    }
+
+    world.set(x, rail_y, z, Block::Lantern);
+    world.add_light(
+        Vec3::new(x as f32, rail_y as f32 - 0.2, z as f32),
+        0xFFC080,
+        1.6,
+        9.0,
+    );
+}
+
+// Rocas sueltas bajo la isla: refuerza la idea de isla "deconstruida" que se cae a pedazos.
+fn build_floating_debris(world: &mut World) {
+    let clusters: [(i32, i32, i32); 4] = [(5, -14, 10), (19, -13, 4), (1, -15, 19), (23, -12, 16)];
+
+    for (cx, cy, cz) in clusters {
+        for (dx, dy, dz) in [(0i32, 0i32, 0i32), (1, 0, 0), (0, 0, 1), (0, -1, 0)] {
+            let block = if (dx + dy + dz).abs() % 2 == 0 {
+                Block::Stone
+            } else {
+                Block::Deepslate
+            };
+            world.set(cx + dx, cy + dy, cz + dz, block);
+        }
+    }
+}
+
 fn build_tree(world: &mut World, x: i32, z: i32, base_y: i32, trunk: i32, radius: f32) {
     for y in base_y..base_y + trunk {
         world.set(x, y, z, Block::OakLog);
@@ -443,7 +533,24 @@ fn build_vegetation(world: &mut World) {
     build_tree(world, 3, 4, above_cliff, 5, 2.8);
     build_tree(world, 13, 3, 1, 8, 3.4);
 
-    for (x, z, height) in [(5, 14, 2), (6, 14, 1), (6, 15, 1), (5, 15, 1), (4, 16, 1)] {
+    // Arboles y arbustos sueltos en la franja de pasto nueva, para que no quede vacia.
+    build_tree(world, -2, 13, 1, 6, 2.6);
+    build_tree(world, -3, 20, 1, 5, 2.4);
+    build_tree(world, 25, 7, 1, 6, 2.8);
+    build_tree(world, 24, 18, 1, 5, 2.4);
+
+    for (x, z, height) in [
+        (5, 14, 2),
+        (6, 14, 1),
+        (6, 15, 1),
+        (5, 15, 1),
+        (4, 16, 1),
+        (0, 8, 1),
+        (-2, 4, 1),
+        (1, 20, 1),
+        (23, 10, 1),
+        (22, 21, 1),
+    ] {
         if let Some(top) = world.top_y(x, z) {
             for y in top + 1..=top + height {
                 world.set_if_empty(x, y, z, Block::Leaves);
@@ -463,7 +570,7 @@ fn build_portal_cave(world: &mut World) {
     let cave_x = 8..=16;
     let walls: Vec<i32> = cave_x
         .clone()
-        .map(|x| (0..SIZE).rev().find(|&z| world.get(x, -3, z).is_some()).unwrap())
+        .map(|x| (-PAD..SIZE + PAD).rev().find(|&z| world.get(x, -3, z).is_some()).unwrap())
         .collect();
     let back = walls.iter().min().unwrap() - 2;
 
@@ -641,25 +748,18 @@ pub fn build_diorama() -> Scene {
     build_farm(&mut world);
     build_paths(&mut world);
     build_bridge(&mut world);
+    build_dock(&mut world);
+    build_well(&mut world);
     build_vegetation(&mut world);
     build_portal_cave(&mut world);
     build_lanterns(&mut world);
+    build_watchtower(&mut world, 24, 10);
+    build_floating_debris(&mut world);
 
-    // Sol de atardecer bajo y calido, entrando por el lado izquierdo de la vista principal.
-    let sun_direction = Vec3::new(-0.3, 0.6, 0.75).normalize();
-    let mut lights = vec![Light::new(
-        sun_direction * 1000.0,
-        Color::from_hex(0xFFDCB4),
-        1.2,
-        f32::INFINITY,
-    )];
+    // Arranca en la hora dorada del atardecer; el ciclo completo vive en daycycle.rs.
+    let (sun, ambient, sky) = crate::daycycle::lighting_at(0.78);
+    let mut lights = vec![sun];
     lights.append(&mut world.lights);
 
-    let ambient = Ambient {
-        sky: Color::from_hex(0x9696CD),
-        ground: Color::from_hex(0xB48C6E),
-        intensity: 0.6,
-    };
-
-    Scene::new(to_cubes(&world), textures, lights, ambient)
+    Scene::new(to_cubes(&world), textures, lights, ambient, sky)
 }
