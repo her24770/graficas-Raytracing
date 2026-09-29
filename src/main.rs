@@ -29,6 +29,9 @@ const ROTATION_SPEED: f32 = PI / 60.0;
 const SHADOW_BIAS: f32 = 1e-3;
 const MAX_SHADOW_CROSSINGS: usize = 6;
 
+const REFLECTION_BIAS: f32 = 1e-3;
+const MAX_DEPTH: u32 = 3;
+
 // Fraccion del dia completo que avanza cada tick del bucle principal.
 const AUTO_TIME_STEP: f32 = 0.00035;
 const MANUAL_TIME_STEP: f32 = 0.003;
@@ -132,12 +135,23 @@ fn shade(intersect: &Intersect, ray_origin: &Vec3, scene: &Scene, time: f32) -> 
     Color::from_vec3(color)
 }
 
-fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene, time: f32) -> Color {
+fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene, time: f32, depth: u32) -> Color {
     let Some(intersect) = scene.trace(ray_origin, ray_direction) else {
         return sky_color(ray_direction, &scene.sky);
     };
 
-    shade(&intersect, ray_origin, scene, time)
+    let color = shade(&intersect, ray_origin, scene, time);
+
+    let reflectivity = intersect.material.reflectivity;
+    if reflectivity <= 0.0 || depth >= MAX_DEPTH {
+        return color;
+    }
+
+    let reflect_direction = reflect(ray_direction, &intersect.normal).normalize();
+    let reflect_origin = intersect.point + intersect.normal * REFLECTION_BIAS;
+    let reflected = cast_ray(&reflect_origin, &reflect_direction, scene, time, depth + 1);
+
+    color * (1.0 - reflectivity) + reflected * reflectivity
 }
 
 fn render_band(
@@ -169,7 +183,8 @@ fn render_band(
             let ray_direction = normalize(&Vec3::new(screen_x, screen_y, -1.0));
             let ray_direction = camera.basis_change(&ray_direction);
 
-            band[local_y * width + x] = cast_ray(&camera.eye, &ray_direction, scene, time).to_hex();
+            band[local_y * width + x] =
+                cast_ray(&camera.eye, &ray_direction, scene, time, 0).to_hex();
         }
     }
 }
