@@ -50,6 +50,37 @@ pub fn reflect(incident: &Vec3, normal: &Vec3) -> Vec3 {
     incident - normal * (2.0 * dot(incident, normal))
 }
 
+// Ley de Snell. None si el angulo es tan cerrado que el rayo no puede salir
+// del material (reflexion interna total): ahi todo se refleja, nada se transmite.
+fn refract(incident: &Vec3, normal: &Vec3, refractive_index: f32) -> Option<Vec3> {
+    let mut cos_i = dot(incident, normal).clamp(-1.0, 1.0);
+    let mut n = *normal;
+    let mut eta = 1.0 / refractive_index;
+
+    if cos_i > 0.0 {
+        // El rayo ya esta dentro del material y busca salir.
+        n = -normal;
+        eta = refractive_index;
+    } else {
+        cos_i = -cos_i;
+    }
+
+    let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+    if k < 0.0 {
+        None
+    } else {
+        Some(incident * eta + n * (eta * cos_i - k.sqrt()))
+    }
+}
+
+// Aproximacion de Schlick: que fraccion de la luz se refleja segun el angulo,
+// en vez de una mezcla fija. A angulo rasante casi todo se refleja, de frente casi nada.
+fn fresnel_reflectance(incident: &Vec3, normal: &Vec3, refractive_index: f32) -> f32 {
+    let cos_i = dot(incident, normal).clamp(-1.0, 1.0).abs();
+    let r0 = ((1.0 - refractive_index) / (1.0 + refractive_index)).powi(2);
+    r0 + (1.0 - r0) * (1.0 - cos_i).powi(5)
+}
+
 // Fraccion de luz que llega desde la luz al punto: 0 en sombra, 1 sin obstaculos.
 // Los bloques emisivos no proyectan sombra y los transparentes dejan pasar parte de la luz.
 fn light_visibility(intersect: &Intersect, light_direction: &Vec3, light_distance: f32, scene: &Scene) -> f32 {
@@ -141,17 +172,41 @@ fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene, time: f32, d
     };
 
     let color = shade(&intersect, ray_origin, scene, time);
+    let material = intersect.material;
 
-    let reflectivity = intersect.material.reflectivity;
-    if reflectivity <= 0.0 || depth >= MAX_DEPTH {
+    if depth >= MAX_DEPTH {
         return color;
     }
 
-    let reflect_direction = reflect(ray_direction, &intersect.normal).normalize();
-    let reflect_origin = intersect.point + intersect.normal * REFLECTION_BIAS;
-    let reflected = cast_ray(&reflect_origin, &reflect_direction, scene, time, depth + 1);
+    if material.transparency > 0.0 {
+        let reflect_direction = reflect(ray_direction, &intersect.normal).normalize();
+        let reflect_origin = intersect.point + intersect.normal * REFLECTION_BIAS;
+        let reflected = cast_ray(&reflect_origin, &reflect_direction, scene, time, depth + 1);
 
-    color * (1.0 - reflectivity) + reflected * reflectivity
+        let transmission = match refract(ray_direction, &intersect.normal, material.refractive_index) {
+            Some(refract_direction) => {
+                let refract_direction = refract_direction.normalize();
+                let refract_origin = intersect.point + refract_direction * REFLECTION_BIAS;
+                let refracted = cast_ray(&refract_origin, &refract_direction, scene, time, depth + 1);
+
+                let fresnel = fresnel_reflectance(ray_direction, &intersect.normal, material.refractive_index);
+                reflected * fresnel + refracted * (1.0 - fresnel)
+            }
+            // Reflexion interna total: el angulo es tan cerrado que no hay salida posible.
+            None => reflected,
+        };
+
+        return color * (1.0 - material.transparency) + transmission * material.transparency;
+    }
+
+    if material.reflectivity > 0.0 {
+        let reflect_direction = reflect(ray_direction, &intersect.normal).normalize();
+        let reflect_origin = intersect.point + intersect.normal * REFLECTION_BIAS;
+        let reflected = cast_ray(&reflect_origin, &reflect_direction, scene, time, depth + 1);
+        return color * (1.0 - material.reflectivity) + reflected * material.reflectivity;
+    }
+
+    color
 }
 
 fn render_band(
