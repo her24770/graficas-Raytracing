@@ -3,6 +3,7 @@ mod color;
 mod cube;
 mod daycycle;
 mod diorama;
+mod end;
 mod framebuffer;
 mod light;
 mod nether;
@@ -291,8 +292,8 @@ fn main() {
         Vec3::new(0.0, 1.0, 0.0),
     );
 
-    // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos] [hora_0_a_1] [bioma_0_a_4_o_5_nether]`
-    let mut in_nether = false;
+    // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos] [hora_0_a_1] [bioma_0_a_4_o_5_nether_o_6_end]`
+    let mut fixed_lighting = false;
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 3 && args[1] == "--screenshot" {
         if let Some(steps) = args.get(3).and_then(|value| value.parse::<i32>().ok()) {
@@ -300,14 +301,17 @@ fn main() {
         }
         if let Some(index) = args.get(5).and_then(|value| value.parse::<usize>().ok()) {
             if index == 5 {
-                in_nether = true;
+                fixed_lighting = true;
                 scene = nether::build_nether();
+            } else if index == 6 {
+                fixed_lighting = true;
+                scene = end::build_end();
             } else {
                 current_biome = diorama::Biome::ALL[index.min(4)];
                 scene = diorama::build_diorama(current_biome);
             }
         }
-        if !in_nether {
+        if !fixed_lighting {
             if let Some(time_of_day) = args.get(4).and_then(|value| value.parse::<f32>().ok()) {
                 let (mut sun, mut ambient, mut sky) = daycycle::lighting_at(time_of_day);
                 apply_biome_mood(&mut sun, &mut ambient, &mut sky, current_biome);
@@ -367,17 +371,22 @@ fn main() {
             (Key::Key5, diorama::Biome::Mesa),
         ];
         for (key, biome) in biome_keys {
-            if window.is_key_pressed(key, KeyRepeat::No) && (in_nether || biome != current_biome) {
+            if window.is_key_pressed(key, KeyRepeat::No) && (fixed_lighting || biome != current_biome) {
                 current_biome = biome;
-                in_nether = false;
+                fixed_lighting = false;
                 scene = diorama::build_diorama(current_biome);
                 println!("bioma: {}", current_biome.name());
             }
         }
-        if window.is_key_pressed(Key::Key6, KeyRepeat::No) && !in_nether {
-            in_nether = true;
+        if window.is_key_pressed(Key::Key6, KeyRepeat::No) {
+            fixed_lighting = true;
             scene = nether::build_nether();
             println!("bioma: Nether");
+        }
+        if window.is_key_pressed(Key::Key7, KeyRepeat::No) {
+            fixed_lighting = true;
+            scene = end::build_end();
+            println!("bioma: End");
         }
 
         if auto_play {
@@ -391,8 +400,8 @@ fn main() {
         }
         time_of_day = time_of_day.rem_euclid(1.0);
 
-        // El Nether no tiene ciclo de dia: su iluminacion ya queda fija al construirlo.
-        if !in_nether {
+        // El Nether y el End no tienen ciclo de dia: su iluminacion ya queda fija al construirlos.
+        if !fixed_lighting {
             let (mut sun, mut ambient, mut sky) = daycycle::lighting_at(time_of_day);
             apply_biome_mood(&mut sun, &mut ambient, &mut sky, current_biome);
             scene.lights[0] = sun;
