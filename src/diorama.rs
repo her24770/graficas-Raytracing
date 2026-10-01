@@ -6,10 +6,10 @@ use crate::color::Color;
 use crate::cube::{face_index, face_tangent_axes, Cube};
 use crate::light::Light;
 use crate::ray_intersect::{FaceTextures, Material};
-use crate::scene::Scene;
+use crate::scene::{Arrival, Portal, Realm, Scene};
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 47] = [
+const TEXTURE_FILES: [&str; 50] = [
     "grass_block_top",
     "grass_block_side",
     "dirt",
@@ -61,6 +61,9 @@ const TEXTURE_FILES: [&str; 47] = [
     "cherry_log_top",
     "cherry_leaves",
     "cherry_planks",
+    "end_portal_frame_top",
+    "end_portal_frame_side",
+    "end_portal",
     "sky_overworld",
 ];
 
@@ -234,6 +237,8 @@ enum Block {
     SeaLantern,
     Snowflake,
     Petal,
+    EndFrame,
+    EndPortal,
 }
 
 impl Block {
@@ -256,6 +261,30 @@ impl Block {
                 | Block::Barrel
                 | Block::HayBale
                 | Block::Campfire
+                | Block::EndFrame
+                | Block::EndPortal
+        )
+    }
+
+    // Lo que la camara libre no puede atravesar. Agua, portal, plantas chicas,
+    // piedritas y particulas se dejan pasar, igual que en Minecraft.
+    fn blocks_movement(self) -> bool {
+        !matches!(
+            self,
+            Block::Water
+                | Block::Droplet
+                | Block::Portal
+                | Block::Torch
+                | Block::Lantern
+                | Block::Wheat
+                | Block::Fern
+                | Block::Poppy
+                | Block::Dandelion
+                | Block::Rock
+                | Block::Cloud
+                | Block::Snowflake
+                | Block::Petal
+                | Block::EndPortal
         )
     }
 
@@ -334,6 +363,22 @@ impl Block {
             Block::Glass => (uniform("glass"), GLASS),
             Block::Obsidian => (uniform("obsidian"), OBSIDIAN),
             Block::Portal => (uniform("nether_portal"), PORTAL),
+            Block::EndFrame => (
+                FaceTextures::top_side_bottom(
+                    tex("end_portal_frame_top"),
+                    tex("end_portal_frame_side"),
+                    tex("end_portal_frame_side"),
+                ),
+                ROCK,
+            ),
+            Block::EndPortal => (
+                uniform("end_portal"),
+                Material {
+                    emission: 1.0,
+                    animated: true,
+                    ..Material::matte(0.0, 1.0)
+                },
+            ),
             Block::Torch => (uniform("glowstone"), GLOW),
             Block::Lantern => (uniform("glowstone"), GLOW),
             Block::Fern => (uniform("oak_leaves"), Material::matte(0.05, 6.0)),
@@ -365,6 +410,7 @@ impl Block {
 struct World {
     blocks: HashMap<(i32, i32, i32), Block>,
     lights: Vec<Light>,
+    arrivals: Vec<Arrival>,
 }
 
 impl World {
@@ -372,7 +418,14 @@ impl World {
         World {
             blocks: HashMap::new(),
             lights: Vec::new(),
+            arrivals: Vec::new(),
         }
+    }
+
+    // Punto donde aparece el jugador al llegar desde otro mundo, en coordenadas de bloque.
+    fn add_arrival(&mut self, from: Realm, block_position: Vec3, yaw: f32) {
+        let eye = block_position - Vec3::new(CENTER, 0.0, CENTER);
+        self.arrivals.push(Arrival { from, eye, yaw });
     }
 
     // Recibe coordenadas de bloque; las luces quedan en coordenadas de escena.
@@ -1052,13 +1105,71 @@ fn build_portal_cave(world: &mut World) {
     // Luces del portal morado balanceadas
     world.add_light(Vec3::new(12.5, -3.5, front), 0xC222FF, 2.5, 10.0);
     world.add_light(Vec3::new(12.5, -3.5, back_light), 0xC222FF, 2.8, 15.0);
+
+    // Al volver del Nether se aparece delante del portal, en la cornisa del precipicio.
+    // Mira en diagonal para ver la pared de la cueva y no solo cielo.
+    world.add_arrival(Realm::Nether, Vec3::new(12.5, -3.98, frame_z as f32 + 1.0), 0.7);
+}
+
+// Camara oculta del portal al End: una sala de ladrillo dentro de la roca, bajo
+// el acantilado. No se ve desde arriba; solo se entra por un tunel que se abre
+// en la pared oeste de la isla.
+fn build_end_chamber(world: &mut World) {
+    const FLOOR: i32 = -4;
+    const CEILING: i32 = 1;
+    let (x0, x1, z0, z1) = (-1, 6, 2, 10);
+
+    for x in x0..=x1 {
+        for z in z0..=z1 {
+            for y in FLOOR..=CEILING {
+                let shell = x == x0 || x == x1 || z == z0 || z == z1 || y == FLOOR || y == CEILING;
+                if shell {
+                    world.set(x, y, z, Block::StoneBricks);
+                } else {
+                    world.remove(x, y, z);
+                }
+            }
+        }
+    }
+
+    for x in -9..=x0 {
+        for z in 5..=7 {
+            for y in FLOOR + 1..=FLOOR + 3 {
+                world.remove(x, y, z);
+            }
+            if world.get(x, FLOOR, z).is_some() {
+                world.set(x, FLOOR, z, Block::StoneBricks);
+            }
+        }
+    }
+
+    // Marco de 5x5 sin esquinas, con la superficie del portal de 3x3 adentro.
+    let (cx, cz) = (3, 6);
+    for dx in -2i32..=2 {
+        for dz in -2i32..=2 {
+            let on_ring = dx.abs() == 2 || dz.abs() == 2;
+            if dx.abs() == 2 && dz.abs() == 2 {
+                continue;
+            }
+            let block = if on_ring { Block::EndFrame } else { Block::EndPortal };
+            world.set(cx + dx, FLOOR + 1, cz + dz, block);
+        }
+    }
+
+    world.add_light(Vec3::new(cx as f32, -1.0, cz as f32), 0x5CFFD6, 1.8, 9.0);
+
+    // Al volver del End se aparece junto al portal, mirando hacia el tunel de salida.
+    world.add_arrival(
+        Realm::End,
+        Vec3::new(0.0, FLOOR as f32 + 2.02, cz as f32),
+        std::f32::consts::PI,
+    );
 }
 
 fn build_lanterns(world: &mut World) {
-    for (x, z) in [(13, 9), (16, 18), (8, 16), (2, 7)] {
-        let Some(ground) = world.top_y(x, z) else {
-            continue;
-        };
+    // Un unico farol chico, en la punta del puente.
+    let (x, z) = (16, 18);
+    if let Some(ground) = world.top_y(x, z) {
         world.set(x, ground + 1, z, Block::Fence);
         world.set(x, ground + 2, z, Block::Fence);
         world.set(x, ground + 3, z, Block::Lantern);
@@ -1096,6 +1207,9 @@ fn block_shapes(world: &World, block: Block, x: i32, y: i32, z: i32) -> Vec<(Vec
         Block::Torch => vec![(Vec3::new(0.0, -0.2, 0.0), Vec3::new(0.16, 0.6, 0.16))],
         Block::Lantern => vec![(Vec3::new(0.0, -0.25, 0.0), Vec3::new(0.4, 0.45, 0.4))],
         Block::Portal => vec![(Vec3::zeros(), Vec3::new(1.0, 1.0, 0.25))],
+        // El marco mide 13/16 de alto y la superficie del portal queda apenas por debajo.
+        Block::EndFrame => vec![(Vec3::new(0.0, -0.09375, 0.0), Vec3::new(1.0, 0.8125, 1.0))],
+        Block::EndPortal => vec![(Vec3::new(0.0, 0.22, 0.0), Vec3::new(1.0, 0.06, 1.0))],
         Block::Wheat => vec![(Vec3::new(0.0, -0.1, 0.0), Vec3::new(0.9, 0.8, 0.9))],
         Block::Fence => {
             let mut parts = vec![(Vec3::zeros(), Vec3::new(0.25, 1.0, 0.25))];
@@ -1188,6 +1302,7 @@ fn to_cubes(world: &World, biome: Biome) -> Vec<Cube> {
 
         for (offset, size) in block_shapes(world, block, x, y, z) {
             let mut cube = Cube::new(center + offset, size, material, textures);
+            cube.solid = block.blocks_movement();
 
             if block.is_opaque_full() {
                 for axis in 0..3 {
@@ -1247,6 +1362,7 @@ pub fn build_diorama(biome: Biome) -> Scene {
     build_watchtower(&mut world, 24, 10);
     build_floating_debris(&mut world);
     build_cliff_details(&mut world);
+    build_end_chamber(&mut world);
     build_cabin_details(&mut world);
     build_clouds(&mut world);
     build_particles(&mut world, biome);
@@ -1258,5 +1374,24 @@ pub fn build_diorama(biome: Biome) -> Scene {
     let mut lights = vec![sun];
     lights.append(&mut world.lights);
 
-    Scene::new(to_cubes(&world, biome), textures, lights, ambient, sky, SKY_TEXTURE)
+    let mut scene = Scene::new(to_cubes(&world, biome), textures, lights, ambient, sky, SKY_TEXTURE);
+
+    // Cada bloque de portal es una zona de teletransporte del tamano de su celda.
+    let half = Vec3::new(0.5, 0.5, 0.5);
+    scene.portals = world
+        .blocks
+        .iter()
+        .filter_map(|(&(x, y, z), &block)| {
+            let destination = match block {
+                Block::Portal => Realm::Nether,
+                Block::EndPortal => Realm::End,
+                _ => return None,
+            };
+            let center = Vec3::new(x as f32 - CENTER, y as f32, z as f32 - CENTER);
+            Some(Portal { min: center - half, max: center + half, destination })
+        })
+        .collect();
+    scene.arrivals = world.arrivals;
+
+    scene
 }

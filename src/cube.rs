@@ -11,6 +11,8 @@ pub struct Cube {
     // Oclusion ambiental por cara (indice eje*2 + lado positivo) y por esquina
     // (indice i + 2j sobre los otros dos ejes en orden ascendente).
     pub ambient_occlusion: [[f32; 4]; 6],
+    // false para lo que se puede atravesar caminando: agua, lava, plantas, particulas.
+    pub solid: bool,
 }
 
 pub fn face_index(axis: usize, positive: bool) -> usize {
@@ -34,6 +36,7 @@ impl Cube {
             material,
             textures,
             ambient_occlusion: [[1.0; 4]; 6],
+            solid: true,
         }
     }
 

@@ -6,10 +6,10 @@ use crate::color::Color;
 use crate::cube::{face_index, face_tangent_axes, Cube};
 use crate::light::Light;
 use crate::ray_intersect::{FaceTextures, Material};
-use crate::scene::{Ambient, Scene, SkyGradient};
+use crate::scene::{Ambient, Arrival, Portal, Realm, Scene, SkyGradient};
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 13] = [
+const TEXTURE_FILES: [&str; 14] = [
     "netherrack",
     "nether_bricks",
     "soul_sand",
@@ -22,6 +22,7 @@ const TEXTURE_FILES: [&str; 13] = [
     "nether_wart_block",
     "shroomlight",
     "obsidian",
+    "nether_portal",
     "sky_nether",
 ];
 
@@ -60,11 +61,12 @@ enum Block {
     NetherWartBlock,
     Glowstone,
     Shroomlight,
+    Portal,
 }
 
 impl Block {
     fn is_opaque_full(self) -> bool {
-        !matches!(self, Block::Lava)
+        !matches!(self, Block::Lava | Block::Portal)
     }
 
     fn appearance(self) -> (FaceTextures, Material) {
@@ -118,6 +120,16 @@ impl Block {
                 let _ = name;
                 (uniform("shroomlight"), GLOW)
             }
+            Block::Portal => (
+                uniform("nether_portal"),
+                Material {
+                    reflectivity: 0.1,
+                    transparency: 0.3,
+                    emission: 1.2,
+                    animated: true,
+                    ..Material::matte(0.2, 30.0)
+                },
+            ),
         }
     }
 }
@@ -417,6 +429,50 @@ fn build_glow_details(world: &mut World) {
     }
 }
 
+// Portal de regreso al overworld, en un claro despejado del borde sur de la isla.
+// Devuelve el punto donde aparece el jugador al llegar desde el overworld.
+fn build_return_portal(world: &mut World) -> Arrival {
+    const FLOOR: i32 = 2;
+    const PORTAL_Z: i32 = 21;
+
+    for x in -2..=3 {
+        for z in 18..=22 {
+            if world.top_y(x, z).is_none() {
+                continue;
+            }
+            world.set(x, FLOOR, z, Block::Netherrack);
+            for y in FLOOR + 1..=FLOOR + 6 {
+                world.blocks.remove(&(x, y, z));
+            }
+        }
+    }
+
+    // El borde inferior del marco queda al ras del piso para entrar caminando.
+    for x in 0..=3 {
+        world.set(x, FLOOR, PORTAL_Z, Block::Obsidian);
+        world.set(x, FLOOR + 4, PORTAL_Z, Block::Obsidian);
+    }
+    for y in FLOOR + 1..=FLOOR + 3 {
+        world.set(0, y, PORTAL_Z, Block::Obsidian);
+        world.set(3, y, PORTAL_Z, Block::Obsidian);
+        world.set(1, y, PORTAL_Z, Block::Portal);
+        world.set(2, y, PORTAL_Z, Block::Portal);
+    }
+    world.add_light(
+        Vec3::new(1.5, FLOOR as f32 + 2.0, PORTAL_Z as f32 - 0.7),
+        0xC222FF,
+        2.0,
+        8.0,
+    );
+
+    // Dos bloques delante del portal, de espaldas a el y mirando hacia el lago de lava.
+    Arrival {
+        from: Realm::Overworld,
+        eye: Vec3::new(1.5 - CENTER, FLOOR as f32 + 2.02, 19.0 - CENTER),
+        yaw: -std::f32::consts::FRAC_PI_2,
+    }
+}
+
 // Rocas de netherrack y obsidiana cayendose bajo la isla, como en el overworld.
 fn build_floating_debris(world: &mut World) {
     let clusters: [(i32, i32, i32); 5] = [
@@ -484,7 +540,13 @@ fn to_cubes(world: &World) -> Vec<Cube> {
 
         let (textures, material) = block.appearance();
         let center = Vec3::new(x as f32 - CENTER, y as f32, z as f32 - CENTER);
-        let mut cube = Cube::new(center, Vec3::new(1.0, 1.0, 1.0), material, textures);
+        let size = if block == Block::Portal {
+            Vec3::new(1.0, 1.0, 0.25)
+        } else {
+            Vec3::new(1.0, 1.0, 1.0)
+        };
+        let mut cube = Cube::new(center, size, material, textures);
+        cube.solid = !matches!(block, Block::Lava | Block::Portal);
 
         if block.is_opaque_full() {
             for axis in 0..3 {
@@ -517,6 +579,7 @@ pub fn build_nether() -> Scene {
     build_fungus(&mut world, 3, 6, 4);
     build_fungus(&mut world, 20, 12, 4);
     build_glow_details(&mut world);
+    let arrival = build_return_portal(&mut world);
     build_floating_debris(&mut world);
 
     // Sin sol ni ciclo de dia: una luz muy tenue desde arriba mas el brillo
@@ -540,5 +603,19 @@ pub fn build_nether() -> Scene {
         high: Color::from_hex(0x784038),
     };
 
-    Scene::new(to_cubes(&world), textures, lights, ambient, sky, SKY_TEXTURE)
+    let mut scene = Scene::new(to_cubes(&world), textures, lights, ambient, sky, SKY_TEXTURE);
+
+    let half = Vec3::new(0.5, 0.5, 0.5);
+    scene.portals = world
+        .blocks
+        .iter()
+        .filter(|&(_, &block)| block == Block::Portal)
+        .map(|(&(x, y, z), _)| {
+            let center = Vec3::new(x as f32 - CENTER, y as f32, z as f32 - CENTER);
+            Portal { min: center - half, max: center + half, destination: Realm::Overworld }
+        })
+        .collect();
+    scene.arrivals = vec![arrival];
+
+    scene
 }

@@ -23,6 +23,27 @@ pub struct SkyGradient {
     pub high: Color,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Realm {
+    Overworld,
+    Nether,
+    End,
+}
+
+// Zona que teletransporta a la camara libre cuando el jugador la toca.
+pub struct Portal {
+    pub min: Vec3,
+    pub max: Vec3,
+    pub destination: Realm,
+}
+
+// Donde aparece el jugador en esta escena cuando llega desde `from`.
+pub struct Arrival {
+    pub from: Realm,
+    pub eye: Vec3,
+    pub yaw: f32,
+}
+
 pub struct Scene {
     pub cubes: Vec<Cube>,
     pub textures: Vec<Texture>,
@@ -30,6 +51,8 @@ pub struct Scene {
     pub ambient: Ambient,
     pub sky: SkyGradient,
     pub sky_texture: usize,
+    pub portals: Vec<Portal>,
+    pub arrivals: Vec<Arrival>,
     bounds_min: Vec3,
     bounds_max: Vec3,
     dims: [usize; 3],
@@ -82,6 +105,8 @@ impl Scene {
             ambient,
             sky,
             sky_texture,
+            portals: Vec::new(),
+            arrivals: Vec::new(),
             bounds_min,
             bounds_max,
             dims,
@@ -115,6 +140,49 @@ impl Scene {
         }
 
         (t_far > EPSILON).then_some((t_near, t_far))
+    }
+
+    pub fn portal_touching(&self, min: &Vec3, max: &Vec3) -> Option<Realm> {
+        self.portals
+            .iter()
+            .find(|portal| (0..3).all(|axis| min[axis] < portal.max[axis] && max[axis] > portal.min[axis]))
+            .map(|portal| portal.destination)
+    }
+
+    pub fn arrival_from(&self, from: Realm) -> Option<&Arrival> {
+        self.arrivals.iter().find(|arrival| arrival.from == from)
+    }
+
+    // Colision para la camara libre: true si la caja toca algun cubo solido.
+    // Usa la misma grilla que los rayos, asi solo mira los cubos cercanos.
+    pub fn blocks_box(&self, min: &Vec3, max: &Vec3) -> bool {
+        for axis in 0..3 {
+            if max[axis] <= self.bounds_min[axis] || min[axis] >= self.bounds_max[axis] {
+                return false;
+            }
+        }
+
+        let low = [0, 1, 2].map(|axis| cell_coord(min[axis], self.bounds_min[axis], self.dims[axis]));
+        let high = [0, 1, 2].map(|axis| cell_coord(max[axis], self.bounds_min[axis], self.dims[axis]));
+
+        for z in low[2]..=high[2] {
+            for y in low[1]..=high[1] {
+                for x in low[0]..=high[0] {
+                    let touches = self.cells[(z * self.dims[1] + y) * self.dims[0] + x]
+                        .iter()
+                        .map(|&index| &self.cubes[index as usize])
+                        .any(|cube| {
+                            cube.solid
+                                && (0..3).all(|axis| min[axis] < cube.max[axis] && max[axis] > cube.min[axis])
+                        });
+                    if touches {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     // Recorrido de grilla de Amanatides-Woo: visita solo las celdas que cruza el rayo.

@@ -6,10 +6,10 @@ use crate::color::Color;
 use crate::cube::{face_index, face_tangent_axes, Cube};
 use crate::light::Light;
 use crate::ray_intersect::{FaceTextures, Material};
-use crate::scene::{Ambient, Scene, SkyGradient};
+use crate::scene::{Ambient, Arrival, Portal, Realm, Scene, SkyGradient};
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 9] = [
+const TEXTURE_FILES: [&str; 12] = [
     "end_stone",
     "end_stone_bricks",
     "obsidian",
@@ -18,6 +18,9 @@ const TEXTURE_FILES: [&str; 9] = [
     "purpur_pillar_top",
     "chorus_plant",
     "sea_lantern",
+    "end_portal_frame_top",
+    "end_portal_frame_side",
+    "end_portal",
     "sky_end",
 ];
 
@@ -53,11 +56,13 @@ enum Block {
     PurpurPillar,
     Chorus,
     Crystal,
+    EndFrame,
+    EndPortal,
 }
 
 impl Block {
     fn is_opaque_full(self) -> bool {
-        true
+        !matches!(self, Block::EndFrame | Block::EndPortal)
     }
 
     fn appearance(self) -> (FaceTextures, Material) {
@@ -90,6 +95,22 @@ impl Block {
             ),
             Block::Chorus => (uniform("chorus_plant"), Material::matte(0.05, 8.0)),
             Block::Crystal => (uniform("sea_lantern"), CRYSTAL),
+            Block::EndFrame => (
+                FaceTextures::top_side_bottom(
+                    tex("end_portal_frame_top"),
+                    tex("end_portal_frame_side"),
+                    tex("end_portal_frame_side"),
+                ),
+                ROCK,
+            ),
+            Block::EndPortal => (
+                uniform("end_portal"),
+                Material {
+                    emission: 1.0,
+                    animated: true,
+                    ..Material::matte(0.0, 1.0)
+                },
+            ),
         }
     }
 }
@@ -262,6 +283,44 @@ fn build_end_city(world: &mut World) {
     }
 }
 
+// Portal de regreso al overworld: el mismo marco con ojos que hay en la camara
+// oculta de la isla, sobre un claro nivelado. Devuelve el punto de llegada.
+fn build_exit_portal(world: &mut World) -> Arrival {
+    const FLOOR: i32 = 1;
+    let (cx, cz) = (7, 12);
+
+    for x in cx - 3..=cx + 3 {
+        for z in cz - 5..=cz + 3 {
+            if world.top_y(x, z).is_none() {
+                continue;
+            }
+            world.set(x, FLOOR, z, Block::EndStone);
+            for y in FLOOR + 1..=FLOOR + 6 {
+                world.blocks.remove(&(x, y, z));
+            }
+        }
+    }
+
+    for dx in -2i32..=2 {
+        for dz in -2i32..=2 {
+            if dx.abs() == 2 && dz.abs() == 2 {
+                continue;
+            }
+            let on_ring = dx.abs() == 2 || dz.abs() == 2;
+            let block = if on_ring { Block::EndFrame } else { Block::EndPortal };
+            world.set(cx + dx, FLOOR + 1, cz + dz, block);
+        }
+    }
+    world.add_light(Vec3::new(cx as f32, FLOOR as f32 + 2.5, cz as f32), 0x5CFFD6, 1.8, 9.0);
+
+    // Se aparece a dos bloques del marco, mirando hacia el portal de regreso.
+    Arrival {
+        from: Realm::Overworld,
+        eye: Vec3::new(cx as f32 - CENTER, FLOOR as f32 + 2.02, (cz - 4) as f32 - CENTER),
+        yaw: std::f32::consts::FRAC_PI_2,
+    }
+}
+
 const OCCLUSION_LEVELS: [f32; 4] = [1.0, 0.78, 0.6, 0.45];
 
 fn face_occlusion(world: &World, position: [i32; 3], axis: usize, positive: bool) -> [f32; 4] {
@@ -307,12 +366,21 @@ fn to_cubes(world: &World) -> Vec<Cube> {
 
         let (textures, material) = block.appearance();
         let center = Vec3::new(x as f32 - CENTER, y as f32, z as f32 - CENTER);
-        let mut cube = Cube::new(center, Vec3::new(1.0, 1.0, 1.0), material, textures);
+        // El marco mide 13/16 de alto y la superficie del portal es una lamina fina.
+        let (offset, size) = match block {
+            Block::EndFrame => (Vec3::new(0.0, -0.09375, 0.0), Vec3::new(1.0, 0.8125, 1.0)),
+            Block::EndPortal => (Vec3::new(0.0, 0.22, 0.0), Vec3::new(1.0, 0.06, 1.0)),
+            _ => (Vec3::zeros(), Vec3::new(1.0, 1.0, 1.0)),
+        };
+        let mut cube = Cube::new(center + offset, size, material, textures);
+        cube.solid = block != Block::EndPortal;
 
-        for axis in 0..3 {
-            for positive in [false, true] {
-                cube.ambient_occlusion[face_index(axis, positive)] =
-                    face_occlusion(world, [x, y, z], axis, positive);
+        if block.is_opaque_full() {
+            for axis in 0..3 {
+                for positive in [false, true] {
+                    cube.ambient_occlusion[face_index(axis, positive)] =
+                        face_occlusion(world, [x, y, z], axis, positive);
+                }
             }
         }
 
@@ -333,6 +401,7 @@ pub fn build_end() -> Scene {
     build_crystal_pillars(&mut world);
     build_end_city(&mut world);
     build_chorus_grove(&mut world);
+    let arrival = build_exit_portal(&mut world);
 
     // Sin sol: una luz muy tenue y fria desde arriba, mas los cristales de
     // las columnas y una ambiental palida y calma, como el vacio del End.
@@ -354,5 +423,19 @@ pub fn build_end() -> Scene {
         high: Color::from_hex(0x6858A0),
     };
 
-    Scene::new(to_cubes(&world), textures, lights, ambient, sky, SKY_TEXTURE)
+    let mut scene = Scene::new(to_cubes(&world), textures, lights, ambient, sky, SKY_TEXTURE);
+
+    let half = Vec3::new(0.5, 0.5, 0.5);
+    scene.portals = world
+        .blocks
+        .iter()
+        .filter(|&(_, &block)| block == Block::EndPortal)
+        .map(|(&(x, y, z), _)| {
+            let center = Vec3::new(x as f32 - CENTER, y as f32, z as f32 - CENTER);
+            Portal { min: center - half, max: center + half, destination: Realm::Overworld }
+        })
+        .collect();
+    scene.arrivals = vec![arrival];
+
+    scene
 }

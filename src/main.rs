@@ -7,6 +7,7 @@ mod end;
 mod framebuffer;
 mod light;
 mod nether;
+mod player;
 mod ray_intersect;
 mod scene;
 mod texture;
@@ -19,13 +20,16 @@ use std::time::{Duration, Instant};
 use crate::camera::Camera;
 use crate::color::Color;
 use crate::framebuffer::Framebuffer;
+use crate::player::{Controls, Player};
 use crate::ray_intersect::Intersect;
-use crate::scene::Scene;
+use crate::scene::{Realm, Scene};
 
 const WIDTH: usize = 800;
 const HEIGHT: usize = 600;
 
 const FOV: f32 = PI / 4.0;
+// En primera persona hace falta un campo de vision mas abierto, como el de Minecraft.
+const FREE_FOV: f32 = 70.0 * PI / 180.0;
 const ROTATION_SPEED: f32 = PI / 60.0;
 const ZOOM_SPEED: f32 = 0.985;
 
@@ -242,12 +246,13 @@ fn render_band(
     height: usize,
     scene: &Scene,
     camera: &Camera,
+    fov: f32,
     time: f32,
 ) {
     let width_f = width as f32;
     let height_f = height as f32;
     let aspect_ratio = width_f / height_f;
-    let perspective_scale = (FOV / 2.0).tan();
+    let perspective_scale = (fov / 2.0).tan();
 
     let band_height = band.len() / width;
 
@@ -270,7 +275,7 @@ fn render_band(
     }
 }
 
-fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera, time: f32) {
+fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera, fov: f32, time: f32) {
     let width = framebuffer.width;
     let height = framebuffer.height;
 
@@ -287,7 +292,7 @@ fn render(framebuffer: &mut Framebuffer, scene: &Scene, camera: &Camera, time: f
         {
             let y_offset = index * rows_per_band;
             scope.spawn(move || {
-                render_band(band, y_offset, width, height, scene, camera, time);
+                render_band(band, y_offset, width, height, scene, camera, fov, time);
             });
         }
     });
@@ -304,6 +309,14 @@ fn apply_biome_mood(sun: &mut light::Light, ambient: &mut scene::Ambient, sky: &
     sky.high = Color::lerp(sky.high, accent, blend);
 }
 
+fn build_realm(realm: Realm, biome: diorama::Biome) -> Scene {
+    match realm {
+        Realm::Overworld => diorama::build_diorama(biome),
+        Realm::Nether => nether::build_nether(),
+        Realm::End => end::build_end(),
+    }
+}
+
 fn main() {
     let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
     let mut current_biome = diorama::Biome::Overworld;
@@ -316,7 +329,7 @@ fn main() {
     );
 
     // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos] [hora_0_a_1] [bioma_0_a_4_o_5_nether_o_6_end]`
-    let mut fixed_lighting = false;
+    let mut realm = Realm::Overworld;
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 3 && args[1] == "--screenshot" {
         if let Some(steps) = args.get(3).and_then(|value| value.parse::<i32>().ok()) {
@@ -324,10 +337,10 @@ fn main() {
         }
         if let Some(index) = args.get(5).and_then(|value| value.parse::<usize>().ok()) {
             if index == 5 {
-                fixed_lighting = true;
+                realm = Realm::Nether;
                 scene = nether::build_nether();
             } else if index == 6 {
-                fixed_lighting = true;
+                realm = Realm::End;
                 scene = end::build_end();
             } else {
                 // 0-4 son los primeros 5 biomas de la isla, 7 es Sakura (el 6to).
@@ -336,7 +349,7 @@ fn main() {
                 scene = diorama::build_diorama(current_biome);
             }
         }
-        if !fixed_lighting {
+        if realm == Realm::Overworld {
             if let Some(time_of_day) = args.get(4).and_then(|value| value.parse::<f32>().ok()) {
                 let (mut sun, mut ambient, mut sky) = daycycle::lighting_at(time_of_day);
                 apply_biome_mood(&mut sun, &mut ambient, &mut sky, current_biome);
@@ -346,7 +359,7 @@ fn main() {
             }
         }
         let start = Instant::now();
-        render(&mut framebuffer, &scene, &camera, 0.0);
+        render(&mut framebuffer, &scene, &camera, FOV, 0.0);
         println!("{} cubos, render en {:?}", scene.cubes.len(), start.elapsed());
         framebuffer
             .save_bmp(&args[2])
@@ -363,31 +376,82 @@ fn main() {
     let mut auto_play = true;
     let clock = Instant::now();
 
+    // None = camara orbital (modo 1); Some = camara libre con colision (modo 2).
+    let mut player: Option<Player> = None;
+    let mut last_frame = Instant::now();
+
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        let orbit = [
-            (Key::Left, ROTATION_SPEED, 0.0),
-            (Key::Right, -ROTATION_SPEED, 0.0),
-            (Key::Up, 0.0, -ROTATION_SPEED),
-            (Key::Down, 0.0, ROTATION_SPEED),
-        ];
+        // El movimiento libre usa tiempo real; el tope evita saltos si un cuadro tarda mucho.
+        let dt = last_frame.elapsed().as_secs_f32().min(0.1);
+        last_frame = Instant::now();
 
-        for (key, delta_yaw, delta_pitch) in orbit {
-            if window.is_key_down(key) {
-                camera.orbit(delta_yaw, delta_pitch);
+        if window.is_key_pressed(Key::Tab, KeyRepeat::No) {
+            player = match player {
+                Some(_) => None,
+                None => Some(Player::from_camera(&camera, &scene)),
+            };
+            println!("camara: {}", if player.is_some() { "libre" } else { "orbital" });
+        }
+
+        let axis = |positive: Key, negative: Key| {
+            window.is_key_down(positive) as i32 as f32 - window.is_key_down(negative) as i32 as f32
+        };
+
+        if let Some(player) = &mut player {
+            if window.is_key_pressed(Key::G, KeyRepeat::No) {
+                player.toggle_walking();
+                println!("camara libre: {}", if player.is_walking() { "caminar" } else { "volar" });
             }
-        }
+            let controls = Controls {
+                forward: axis(Key::W, Key::S),
+                strafe: axis(Key::D, Key::A),
+                vertical: axis(Key::Space, Key::LeftShift),
+                turn: axis(Key::Right, Key::Left),
+                look_up: axis(Key::Up, Key::Down),
+                jump: window.is_key_down(Key::Space),
+            };
+            player.update(&scene, controls, dt);
 
-        if window.is_key_down(Key::Equal) {
-            camera.zoom(ZOOM_SPEED);
-        }
-        if window.is_key_down(Key::Minus) {
-            camera.zoom(1.0 / ZOOM_SPEED);
+            // Tocar un portal teletransporta: se carga el otro mundo y el jugador
+            // aparece en el punto de llegada que ese mundo define para este origen.
+            let (body_min, body_max) = player.body();
+            if let Some(destination) = scene.portal_touching(&body_min, &body_max) {
+                let origin = realm;
+                realm = destination;
+                scene = build_realm(realm, current_biome);
+                match scene.arrival_from(origin) {
+                    Some(arrival) => player.arrive(arrival.eye, arrival.yaw, &scene),
+                    None => player.unstick(&scene),
+                }
+                println!("portal: {origin:?} -> {realm:?}");
+            }
+        } else {
+            let orbit = [
+                (Key::Left, ROTATION_SPEED, 0.0),
+                (Key::Right, -ROTATION_SPEED, 0.0),
+                (Key::Up, 0.0, -ROTATION_SPEED),
+                (Key::Down, 0.0, ROTATION_SPEED),
+            ];
+
+            for (key, delta_yaw, delta_pitch) in orbit {
+                if window.is_key_down(key) {
+                    camera.orbit(delta_yaw, delta_pitch);
+                }
+            }
+
+            if window.is_key_down(Key::Equal) {
+                camera.zoom(ZOOM_SPEED);
+            }
+            if window.is_key_down(Key::Minus) {
+                camera.zoom(1.0 / ZOOM_SPEED);
+            }
         }
 
         if window.is_key_pressed(Key::T, KeyRepeat::No) {
             auto_play = !auto_play;
         }
 
+        let mut scene_changed = false;
         let biome_keys = [
             (Key::Key1, diorama::Biome::Overworld),
             (Key::Key2, diorama::Biome::Marine),
@@ -397,22 +461,31 @@ fn main() {
             (Key::Key8, diorama::Biome::Sakura),
         ];
         for (key, biome) in biome_keys {
-            if window.is_key_pressed(key, KeyRepeat::No) && (fixed_lighting || biome != current_biome) {
+            if window.is_key_pressed(key, KeyRepeat::No) && (realm != Realm::Overworld || biome != current_biome) {
                 current_biome = biome;
-                fixed_lighting = false;
+                realm = Realm::Overworld;
                 scene = diorama::build_diorama(current_biome);
+                scene_changed = true;
                 println!("bioma: {}", current_biome.name());
             }
         }
         if window.is_key_pressed(Key::Key6, KeyRepeat::No) {
-            fixed_lighting = true;
+            realm = Realm::Nether;
             scene = nether::build_nether();
+            scene_changed = true;
             println!("bioma: Nether");
         }
         if window.is_key_pressed(Key::Key7, KeyRepeat::No) {
-            fixed_lighting = true;
+            realm = Realm::End;
             scene = end::build_end();
+            scene_changed = true;
             println!("bioma: End");
+        }
+        // Otra escena tiene otra geometria: si el jugador quedo dentro de un bloque, sale.
+        if scene_changed {
+            if let Some(player) = &mut player {
+                player.unstick(&scene);
+            }
         }
 
         if auto_play {
@@ -427,7 +500,7 @@ fn main() {
         time_of_day = time_of_day.rem_euclid(1.0);
 
         // El Nether y el End no tienen ciclo de dia: su iluminacion ya queda fija al construirlos.
-        if !fixed_lighting {
+        if realm == Realm::Overworld {
             let (mut sun, mut ambient, mut sky) = daycycle::lighting_at(time_of_day);
             apply_biome_mood(&mut sun, &mut ambient, &mut sky, current_biome);
             scene.lights[0] = sun;
@@ -437,12 +510,18 @@ fn main() {
 
         // Se redibuja siempre (camara, ciclo del dia y agua en movimiento lo requieren);
         // el presupuesto de tiempo por frame sobra de sobra con la grilla de aceleracion.
-        render(&mut framebuffer, &scene, &camera, clock.elapsed().as_secs_f32());
+        let free_view = player.as_ref().map(Player::camera);
+        let (view, fov) = match &free_view {
+            Some(free_camera) => (free_camera, FREE_FOV),
+            None => (&camera, FOV),
+        };
+        render(&mut framebuffer, &scene, view, fov, clock.elapsed().as_secs_f32());
 
         window
             .update_with_buffer(&framebuffer.buffer, WIDTH, HEIGHT)
             .unwrap();
 
-        std::thread::sleep(frame_delay);
+        // Solo se espera lo que falte para los 16 ms; si el cuadro ya tardo mas, no se duerme.
+        std::thread::sleep(frame_delay.saturating_sub(last_frame.elapsed()));
     }
 }
