@@ -39,6 +39,16 @@ impl Color {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
 
+    // Multiplica canal por canal (no suma): sirve para tenir una textura con
+    // un color ambiente, como el atardecer tiniendo la textura del cielo.
+    pub fn modulate(self, other: Color) -> Color {
+        Color {
+            r: ((self.r as u32 * other.r as u32) / 255) as u8,
+            g: ((self.g as u32 * other.g as u32) / 255) as u8,
+            b: ((self.b as u32 * other.b as u32) / 255) as u8,
+        }
+    }
+
     pub fn lerp(a: Color, b: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
         Color {

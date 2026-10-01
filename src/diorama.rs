@@ -9,7 +9,7 @@ use crate::ray_intersect::{FaceTextures, Material};
 use crate::scene::{Ambient, Scene};
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 40] = [
+const TEXTURE_FILES: [&str; 41] = [
     "grass_block_top",
     "grass_block_side",
     "dirt",
@@ -55,7 +55,10 @@ const TEXTURE_FILES: [&str; 40] = [
     "hay_block_side",
     "poppy",
     "dandelion",
+    "sky_overworld",
 ];
+
+const SKY_TEXTURE: usize = TEXTURE_FILES.len() - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Biome {
@@ -1009,5 +1012,5 @@ pub fn build_diorama(biome: Biome) -> Scene {
     let mut lights = vec![sun];
     lights.append(&mut world.lights);
 
-    Scene::new(to_cubes(&world, biome), textures, lights, ambient, sky)
+    Scene::new(to_cubes(&world, biome), textures, lights, ambient, sky, SKY_TEXTURE)
 }

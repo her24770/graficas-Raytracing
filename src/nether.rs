@@ -9,7 +9,7 @@ use crate::ray_intersect::{FaceTextures, Material};
 use crate::scene::{Ambient, Scene, SkyGradient};
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 12] = [
+const TEXTURE_FILES: [&str; 13] = [
     "netherrack",
     "nether_bricks",
     "soul_sand",
@@ -22,7 +22,10 @@ const TEXTURE_FILES: [&str; 12] = [
     "nether_wart_block",
     "shroomlight",
     "obsidian",
+    "sky_nether",
 ];
+
+const SKY_TEXTURE: usize = TEXTURE_FILES.len() - 1;
 
 fn tex(name: &str) -> usize {
     TEXTURE_FILES
@@ -529,11 +532,13 @@ pub fn build_nether() -> Scene {
         intensity: 0.85,
     };
 
+    // Tinte claro: la textura del cielo ya aporta el tono oscuro, este color
+    // solo lo multiplica (tenir), por eso debe ser claro y no casi negro.
     let sky = SkyGradient {
-        horizon: Color::from_hex(0x120404),
-        middle: Color::from_hex(0x0A0202),
-        high: Color::from_hex(0x000000),
+        horizon: Color::from_hex(0xE8A878),
+        middle: Color::from_hex(0xC87850),
+        high: Color::from_hex(0x784038),
     };
 
-    Scene::new(to_cubes(&world), textures, lights, ambient, sky)
+    Scene::new(to_cubes(&world), textures, lights, ambient, sky, SKY_TEXTURE)
 }

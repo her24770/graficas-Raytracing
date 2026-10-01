@@ -9,7 +9,7 @@ use crate::ray_intersect::{FaceTextures, Material};
 use crate::scene::{Ambient, Scene, SkyGradient};
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 8] = [
+const TEXTURE_FILES: [&str; 9] = [
     "end_stone",
     "end_stone_bricks",
     "obsidian",
@@ -18,7 +18,10 @@ const TEXTURE_FILES: [&str; 8] = [
     "purpur_pillar_top",
     "chorus_plant",
     "sea_lantern",
+    "sky_end",
 ];
+
+const SKY_TEXTURE: usize = TEXTURE_FILES.len() - 1;
 
 fn tex(name: &str) -> usize {
     TEXTURE_FILES
@@ -343,11 +346,13 @@ pub fn build_end() -> Scene {
         intensity: 0.6,
     };
 
+    // Tinte claro: la textura del cielo ya aporta el negro del vacio y las
+    // estrellas, este color solo lo multiplica (tenir), no debe ser casi negro.
     let sky = SkyGradient {
-        horizon: Color::from_hex(0x0C0A14),
-        middle: Color::from_hex(0x050408),
-        high: Color::from_hex(0x000000),
+        horizon: Color::from_hex(0xC8BEE8),
+        middle: Color::from_hex(0x9A8CC8),
+        high: Color::from_hex(0x6858A0),
     };
 
-    Scene::new(to_cubes(&world), textures, lights, ambient, sky)
+    Scene::new(to_cubes(&world), textures, lights, ambient, sky, SKY_TEXTURE)
 }

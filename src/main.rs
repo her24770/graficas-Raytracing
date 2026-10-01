@@ -40,13 +40,27 @@ const AUTO_TIME_STEP: f32 = 0.00035;
 const MANUAL_TIME_STEP: f32 = 0.003;
 const START_TIME_OF_DAY: f32 = 0.78;
 
-fn sky_color(ray_direction: &Vec3, sky: &crate::scene::SkyGradient) -> Color {
+// Degradado vertical usado como tinte (atardecer, bioma, etc.) sobre la textura del cielo.
+fn sky_tint(ray_direction: &Vec3, sky: &crate::scene::SkyGradient) -> Color {
     let t = ((ray_direction.y + 1.0) / 1.2).clamp(0.0, 1.0);
     if t < 0.5 {
         Color::lerp(sky.horizon, sky.middle, t / 0.5)
     } else {
         Color::lerp(sky.middle, sky.high, (t - 0.5) / 0.5)
     }
+}
+
+// Mapeo equirectangular: convierte la direccion 3D del rayo en coordenadas (u, v)
+// de una textura panoramica, para que el cielo envuelva la escena en todas direcciones.
+fn sky_color(ray_direction: &Vec3, scene: &Scene) -> Color {
+    let u = (ray_direction.z.atan2(ray_direction.x) / (2.0 * PI)) + 0.5;
+    let v = ray_direction.y.clamp(-1.0, 1.0).acos() / PI;
+
+    let texture = &scene.textures[scene.sky_texture];
+    let sample = texture.sample(u, v);
+    let tint = sky_tint(ray_direction, &scene.sky);
+
+    sample.modulate(tint) + tint * 0.15
 }
 
 pub fn reflect(incident: &Vec3, normal: &Vec3) -> Vec3 {
@@ -171,7 +185,7 @@ fn shade(intersect: &Intersect, ray_origin: &Vec3, scene: &Scene, time: f32) -> 
 
 fn cast_ray(ray_origin: &Vec3, ray_direction: &Vec3, scene: &Scene, time: f32, depth: u32) -> Color {
     let Some(intersect) = scene.trace(ray_origin, ray_direction) else {
-        return sky_color(ray_direction, &scene.sky);
+        return sky_color(ray_direction, scene);
     };
 
     let color = shade(&intersect, ray_origin, scene, time);

@@ -29,6 +29,7 @@ pub struct Scene {
     pub lights: Vec<Light>,
     pub ambient: Ambient,
     pub sky: SkyGradient,
+    pub sky_texture: usize,
     bounds_min: Vec3,
     bounds_max: Vec3,
     dims: [usize; 3],
@@ -42,6 +43,7 @@ impl Scene {
         lights: Vec<Light>,
         ambient: Ambient,
         sky: SkyGradient,
+        sky_texture: usize,
     ) -> Self {
         let mut bounds_min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
         let mut bounds_max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
@@ -79,6 +81,7 @@ impl Scene {
             lights,
             ambient,
             sky,
+            sky_texture,
             bounds_min,
             bounds_max,
             dims,
