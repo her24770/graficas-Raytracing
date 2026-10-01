@@ -1,3 +1,4 @@
+mod audio;
 mod camera;
 mod color;
 mod cube;
@@ -17,6 +18,7 @@ use nalgebra_glm::{dot, normalize, Vec3};
 use std::f32::consts::PI;
 use std::time::{Duration, Instant};
 
+use crate::audio::Music;
 use crate::camera::Camera;
 use crate::color::Color;
 use crate::framebuffer::Framebuffer;
@@ -38,10 +40,13 @@ const MAX_SHADOW_CROSSINGS: usize = 6;
 
 const REFLECTION_BIAS: f32 = 1e-3;
 const MAX_DEPTH: u32 = 3;
+const MUSIC_FILE: &str = "assets/audio/musica.mp3";
 
 // Fraccion del dia completo que avanza cada tick del bucle principal.
 const AUTO_TIME_STEP: f32 = 0.00035;
 const MANUAL_TIME_STEP: f32 = 0.003;
+// Velocidades del ciclo de dia (tecla V): multiplican el avance automatico de la hora.
+const TIME_SPEEDS: [(f32, &str); 3] = [(1.0, "normal"), (4.0, "rapido"), (12.0, "muy rapido")];
 const START_TIME_OF_DAY: f32 = 0.78;
 
 // Degradado vertical usado como tinte (atardecer, bioma, etc.) sobre la textura del cielo.
@@ -328,7 +333,7 @@ fn main() {
         Vec3::new(0.0, 1.0, 0.0),
     );
 
-    // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos] [hora_0_a_1] [bioma_0_a_4_o_5_nether_o_6_end]`
+    // Modo captura: `cargo run --release -- --screenshot salida.bmp [giro_en_pasos] [hora_0_a_1] [bioma_0_a_5_o_6_nether_o_7_end]`
     let mut realm = Realm::Overworld;
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 3 && args[1] == "--screenshot" {
@@ -336,16 +341,15 @@ fn main() {
             camera.orbit(steps as f32 * ROTATION_SPEED, 0.0);
         }
         if let Some(index) = args.get(5).and_then(|value| value.parse::<usize>().ok()) {
-            if index == 5 {
+            if index == 6 {
                 realm = Realm::Nether;
                 scene = nether::build_nether();
-            } else if index == 6 {
+            } else if index == 7 {
                 realm = Realm::End;
                 scene = end::build_end();
             } else {
-                // 0-4 son los primeros 5 biomas de la isla, 7 es Sakura (el 6to).
-                let biome_index = if index == 7 { 5 } else { index.min(4) };
-                current_biome = diorama::Biome::ALL[biome_index];
+                // Mismo orden que las teclas 1-6: los biomas de la isla, con Sakura al final.
+                current_biome = diorama::Biome::ALL[index.min(5)];
                 scene = diorama::build_diorama(current_biome);
             }
         }
@@ -374,16 +378,24 @@ fn main() {
 
     let mut time_of_day = START_TIME_OF_DAY;
     let mut auto_play = true;
+    let mut time_speed = 0;
     let clock = Instant::now();
 
     // None = camara orbital (modo 1); Some = camara libre con colision (modo 2).
     let mut player: Option<Player> = None;
     let mut last_frame = Instant::now();
+    let mut music = Music::start(MUSIC_FILE);
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // El movimiento libre usa tiempo real; el tope evita saltos si un cuadro tarda mucho.
         let dt = last_frame.elapsed().as_secs_f32().min(0.1);
         last_frame = Instant::now();
+
+        music.keep_looping();
+        if window.is_key_pressed(Key::M, KeyRepeat::No) {
+            music.toggle();
+            println!("musica: {}", if music.is_playing() { "encendida" } else { "apagada" });
+        }
 
         if window.is_key_pressed(Key::Tab, KeyRepeat::No) {
             player = match player {
@@ -458,7 +470,7 @@ fn main() {
             (Key::Key3, diorama::Biome::Snow),
             (Key::Key4, diorama::Biome::Desert),
             (Key::Key5, diorama::Biome::Mesa),
-            (Key::Key8, diorama::Biome::Sakura),
+            (Key::Key6, diorama::Biome::Sakura),
         ];
         for (key, biome) in biome_keys {
             if window.is_key_pressed(key, KeyRepeat::No) && (realm != Realm::Overworld || biome != current_biome) {
@@ -469,13 +481,13 @@ fn main() {
                 println!("bioma: {}", current_biome.name());
             }
         }
-        if window.is_key_pressed(Key::Key6, KeyRepeat::No) {
+        if window.is_key_pressed(Key::Key7, KeyRepeat::No) {
             realm = Realm::Nether;
             scene = nether::build_nether();
             scene_changed = true;
             println!("bioma: Nether");
         }
-        if window.is_key_pressed(Key::Key7, KeyRepeat::No) {
+        if window.is_key_pressed(Key::Key8, KeyRepeat::No) {
             realm = Realm::End;
             scene = end::build_end();
             scene_changed = true;
@@ -488,8 +500,13 @@ fn main() {
             }
         }
 
+        if window.is_key_pressed(Key::V, KeyRepeat::No) {
+            time_speed = (time_speed + 1) % TIME_SPEEDS.len();
+            println!("velocidad del tiempo: {}", TIME_SPEEDS[time_speed].1);
+        }
+
         if auto_play {
-            time_of_day += AUTO_TIME_STEP;
+            time_of_day += AUTO_TIME_STEP * TIME_SPEEDS[time_speed].0;
         }
         if window.is_key_down(Key::Comma) {
             time_of_day -= MANUAL_TIME_STEP;
