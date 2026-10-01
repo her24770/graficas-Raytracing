@@ -14,9 +14,6 @@ bin/
 .DS_Store
 Thumbs.db
 
-# Entornos o carpetas no relacionadas
-juice-shop/
-
 
 # Added by cargo
 
