@@ -102,11 +102,11 @@ impl Biome {
     pub fn mood(self) -> (Color, f32, f32) {
         match self {
             Biome::Overworld => (Color::from_hex(0x000000), 0.0, 1.0),
-            Biome::Marine => (Color::from_hex(0x1E5A66), 0.35, 0.85),
-            Biome::Snow => (Color::from_hex(0x8FA8B8), 0.45, 0.7),
-            Biome::Desert => (Color::from_hex(0xFFE9A8), 0.3, 1.25),
-            Biome::Mesa => (Color::from_hex(0xC96A3D), 0.35, 1.05),
-            Biome::Sakura => (Color::from_hex(0xF5C9DC), 0.2, 1.0),
+            Biome::Marine => (Color::from_hex(0x1E5A66), 0.45, 0.9), // Más vibrante
+            Biome::Snow => (Color::from_hex(0x8FA8B8), 0.6, 0.75), // Más blanco/frío
+            Biome::Desert => (Color::from_hex(0xFFE9A8), 0.4, 1.3), // Más brillante
+            Biome::Mesa => (Color::from_hex(0xC96A3D), 0.45, 1.1), // Más naranja
+            Biome::Sakura => (Color::from_hex(0xFF88AA), 0.7, 1.2), // Mucho más rosado y cute
         }
     }
 }
@@ -143,7 +143,7 @@ fn terrain_textures(biome: Biome) -> TerrainTextures {
         Biome::Snow => TerrainTextures {
             top: tex("snow"),
             side: tex("snow"),
-            dirt: tex("dirt"),
+            dirt: tex("ice"),
             stone: tex("stone"),
             deepslate: tex("deepslate"),
             water: tex("ice"),
@@ -232,6 +232,8 @@ enum Block {
     Cloud,
     Campfire,
     SeaLantern,
+    Snowflake,
+    Petal,
 }
 
 impl Block {
@@ -304,12 +306,13 @@ impl Block {
             Block::Stone => (FaceTextures::uniform(terrain.stone), ROCK),
             Block::Deepslate => (FaceTextures::uniform(terrain.deepslate), ROCK),
             Block::StoneBricks | Block::StoneSlab => (uniform("stone_bricks"), ROCK),
-            // En el bioma Sakura los arboles cambian a cerezo; todo lo demas
-            // (cabana, cercas, suelo) se mantiene igual que en los otros biomas.
             Block::OakLog if biome == Biome::Sakura => (
                 FaceTextures::top_side_bottom(tex("cherry_log_top"), tex("cherry_log"), tex("cherry_log_top")),
                 WOOD,
             ),
+            Block::StrippedOakLog if biome == Biome::Sakura => (uniform("cherry_log"), WOOD),
+            Block::OakPlanks | Block::Fence | Block::SprucePlanks if biome == Biome::Sakura => (uniform("cherry_planks"), WOOD),
+            
             Block::OakLog => (uniform("oak_log"), WOOD),
             Block::StrippedOakLog => (uniform("stripped_oak_log"), WOOD),
             Block::OakPlanks | Block::Fence => (uniform("oak_planks"), WOOD),
@@ -348,6 +351,8 @@ impl Block {
                 Material::matte(0.05, 6.0),
             ),
             Block::Cloud => (uniform("snow"), Material::matte(0.0, 1.0)),
+            Block::Snowflake => (uniform("snow"), Material::matte(0.2, 5.0)),
+            Block::Petal => (uniform("cherry_leaves"), Material::matte(0.2, 5.0)),
             Block::Campfire => (
                 FaceTextures::top_side_bottom(tex("campfire_fire"), tex("campfire_log"), tex("campfire_log")),
                 GLOW,
@@ -1126,6 +1131,8 @@ fn block_shapes(world: &World, block: Block, x: i32, y: i32, z: i32) -> Vec<(Vec
         }
         Block::Barrel => vec![(Vec3::new(0.0, -0.15, 0.0), Vec3::new(0.75, 0.7, 0.75))],
         Block::Cloud => vec![(Vec3::zeros(), Vec3::new(1.0, 0.55, 1.0))],
+        Block::Snowflake => vec![(Vec3::new(0.4, 0.4, 0.4), Vec3::new(0.15, 0.15, 0.15))],
+        Block::Petal => vec![(Vec3::new(0.4, 0.4, 0.4), Vec3::new(0.2, 0.05, 0.2))],
         Block::Campfire => vec![(Vec3::new(0.0, -0.25, 0.0), Vec3::new(1.0, 0.5, 1.0))],
         _ => vec![full],
     }
@@ -1197,6 +1204,27 @@ fn to_cubes(world: &World, biome: Biome) -> Vec<Cube> {
 
     cubes
 }
+fn build_particles(world: &mut World, biome: Biome) {
+    let particle_block = match biome {
+        Biome::Snow => Some(Block::Snowflake),
+        Biome::Sakura => Some(Block::Petal),
+        _ => None,
+    };
+
+    if let Some(block) = particle_block {
+        for x in -5..=30 {
+            for z in -5..=30 {
+                // Cantidad drásticamente reducida (pocos) y solo en el piso
+                if hash(x * 7, z * 13) % 25 == 0 {
+                    if let Some(top) = world.top_y(x, z) {
+                        // Lo colocamos justo encima del suelo (como si ya hubieran caído)
+                        world.set_if_empty(x, top + 1, z, block);
+                    }
+                }
+            }
+        }
+    }
+}
 
 pub fn build_diorama(biome: Biome) -> Scene {
     let textures = TEXTURE_FILES
@@ -1221,6 +1249,7 @@ pub fn build_diorama(biome: Biome) -> Scene {
     build_cliff_details(&mut world);
     build_cabin_details(&mut world);
     build_clouds(&mut world);
+    build_particles(&mut world, biome);
     build_ground_details(&mut world);
     build_camp(&mut world);
 
