@@ -60,7 +60,16 @@ fn sky_color(ray_direction: &Vec3, scene: &Scene) -> Color {
     let sample = texture.sample(u, v);
     let tint = sky_tint(ray_direction, &scene.sky);
 
-    sample.modulate(tint) + tint * 0.15
+    // El cielo estaba muy cargado: usamos el gradiente limpio como base principal (85%)
+    // y la textura aporta solo un detalle muy sutil (15%) para que no sature la vista.
+    let base = tint * 0.85 + sample.modulate(tint) * 0.15;
+    
+    // Filtramos las estrellas para que solo los pixeles EXTREMADAMENTE blancos brillen,
+    // y lo hagan de forma tenue, para evitar que parezca ruido.
+    let luma = (sample.r as f32 + sample.g as f32 + sample.b as f32) / (255.0 * 3.0);
+    let star_glow = luma.powi(16) * 0.3; // powi(16) mata los grises, solo sobrevive el blanco puro
+    
+    base + sample * star_glow
 }
 
 pub fn reflect(incident: &Vec3, normal: &Vec3) -> Vec3 {
@@ -321,7 +330,9 @@ fn main() {
                 fixed_lighting = true;
                 scene = end::build_end();
             } else {
-                current_biome = diorama::Biome::ALL[index.min(4)];
+                // 0-4 son los primeros 5 biomas de la isla, 7 es Sakura (el 6to).
+                let biome_index = if index == 7 { 5 } else { index.min(4) };
+                current_biome = diorama::Biome::ALL[biome_index];
                 scene = diorama::build_diorama(current_biome);
             }
         }
@@ -383,6 +394,7 @@ fn main() {
             (Key::Key3, diorama::Biome::Snow),
             (Key::Key4, diorama::Biome::Desert),
             (Key::Key5, diorama::Biome::Mesa),
+            (Key::Key8, diorama::Biome::Sakura),
         ];
         for (key, biome) in biome_keys {
             if window.is_key_pressed(key, KeyRepeat::No) && (fixed_lighting || biome != current_biome) {

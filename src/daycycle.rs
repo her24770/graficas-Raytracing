@@ -22,27 +22,27 @@ const KEYFRAMES: [Keyframe; 5] = [
     Keyframe {
         time: 0.0,
         direction: (0.2, 0.5, -0.3),
-        sun_color: 0x6E7EC2,
-        sun_intensity: 0.35,
+        sun_color: 0x4A5596, // Mas azul marino y oscuro
+        sun_intensity: 0.12,  // Muy oscuro en la noche
         sky: 0x1A1A33,
-        ground: 0x24283B,
-        ambient_intensity: 0.25,
-        sky_gradient: (0x14142B, 0x1E1E3C, 0x0A0A1A),
+        ground: 0x1A1E2D,
+        ambient_intensity: 0.1, // Noche oscura
+        sky_gradient: (0x0F0F1A, 0x14142B, 0x050510),
     },
     Keyframe {
         time: 0.22,
         direction: (0.7, 0.25, 0.4),
-        sun_color: 0xFFB37A,
-        sun_intensity: 0.9,
-        sky: 0xB98CC0,
-        ground: 0x8C6E8C,
+        sun_color: 0xFFD8B0, // Tono mas calido de amanecer
+        sun_intensity: 1.0,
+        sky: 0xC49BB8,
+        ground: 0x8C7485,
         ambient_intensity: 0.45,
-        sky_gradient: (0xF2B08C, 0xE0A0B0, 0x6E6098),
+        sky_gradient: (0xFFC0A0, 0xE5A5B8, 0x60659A),
     },
     Keyframe {
         time: 0.5,
         direction: (0.2, 0.9, 0.3),
-        sun_color: 0xFFF3D6,
+        sun_color: 0xFFF8E6, // Mediodia brillante
         sun_intensity: 1.5,
         sky: 0x8FB8E0,
         ground: 0x9C8F72,
@@ -52,22 +52,22 @@ const KEYFRAMES: [Keyframe; 5] = [
     Keyframe {
         time: 0.78,
         direction: (-0.6, 0.32, 0.73),
-        sun_color: 0xFFA24D,
-        sun_intensity: 1.35,
-        sky: 0x7B78C2,
-        ground: 0xC77A45,
+        sun_color: 0xFF6B1A, // Naranja muy fuerte de atardecer
+        sun_intensity: 1.6,
+        sky: 0x9B62A6,
+        ground: 0xB5653C,
         ambient_intensity: 0.5,
-        sky_gradient: (0xF2B866, 0xDE8A6A, 0x6E5A8C),
+        sky_gradient: (0xFF7A00, 0xE85A3A, 0x624A8C), // Muy vibrante
     },
     Keyframe {
         time: 1.0,
         direction: (0.2, 0.5, -0.3),
-        sun_color: 0x6E7EC2,
-        sun_intensity: 0.35,
+        sun_color: 0x4A5596, // Lo mismo que time: 0.0
+        sun_intensity: 0.12,
         sky: 0x1A1A33,
-        ground: 0x24283B,
-        ambient_intensity: 0.25,
-        sky_gradient: (0x14142B, 0x1E1E3C, 0x0A0A1A),
+        ground: 0x1A1E2D,
+        ambient_intensity: 0.1,
+        sky_gradient: (0x0F0F1A, 0x14142B, 0x050510),
     },
 ];
 

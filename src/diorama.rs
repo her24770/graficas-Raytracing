@@ -6,10 +6,10 @@ use crate::color::Color;
 use crate::cube::{face_index, face_tangent_axes, Cube};
 use crate::light::Light;
 use crate::ray_intersect::{FaceTextures, Material};
-use crate::scene::{Ambient, Scene};
+use crate::scene::Scene;
 use crate::texture::Texture;
 
-const TEXTURE_FILES: [&str; 41] = [
+const TEXTURE_FILES: [&str; 47] = [
     "grass_block_top",
     "grass_block_side",
     "dirt",
@@ -55,6 +55,12 @@ const TEXTURE_FILES: [&str; 41] = [
     "hay_block_side",
     "poppy",
     "dandelion",
+    "campfire_log",
+    "campfire_fire",
+    "cherry_log",
+    "cherry_log_top",
+    "cherry_leaves",
+    "cherry_planks",
     "sky_overworld",
 ];
 
@@ -67,15 +73,17 @@ pub enum Biome {
     Snow,
     Desert,
     Mesa,
+    Sakura,
 }
 
 impl Biome {
-    pub const ALL: [Biome; 5] = [
+    pub const ALL: [Biome; 6] = [
         Biome::Overworld,
         Biome::Marine,
         Biome::Snow,
         Biome::Desert,
         Biome::Mesa,
+        Biome::Sakura,
     ];
 
     pub fn name(self) -> &'static str {
@@ -85,6 +93,7 @@ impl Biome {
             Biome::Snow => "Nevado",
             Biome::Desert => "Desertico",
             Biome::Mesa => "Mesa",
+            Biome::Sakura => "Sakura",
         }
     }
 
@@ -97,6 +106,7 @@ impl Biome {
             Biome::Snow => (Color::from_hex(0x8FA8B8), 0.45, 0.7),
             Biome::Desert => (Color::from_hex(0xFFE9A8), 0.3, 1.25),
             Biome::Mesa => (Color::from_hex(0xC96A3D), 0.35, 1.05),
+            Biome::Sakura => (Color::from_hex(0xF5C9DC), 0.2, 1.0),
         }
     }
 }
@@ -152,6 +162,15 @@ fn terrain_textures(biome: Biome) -> TerrainTextures {
             dirt: tex("orange_terracotta"),
             stone: tex("yellow_terracotta"),
             deepslate: tex("brown_terracotta"),
+            water: tex("water_still"),
+        },
+        // El terreno del Sakura es el mismo pasto normal; lo que cambia son los arboles.
+        Biome::Sakura => TerrainTextures {
+            top: tex("grass_block_top"),
+            side: tex("grass_block_side"),
+            dirt: tex("dirt"),
+            stone: tex("stone"),
+            deepslate: tex("deepslate"),
             water: tex("water_still"),
         },
     }
@@ -211,6 +230,8 @@ enum Block {
     Barrel,
     HayBale,
     Cloud,
+    Campfire,
+    SeaLantern,
 }
 
 impl Block {
@@ -232,6 +253,7 @@ impl Block {
                 | Block::Rock
                 | Block::Barrel
                 | Block::HayBale
+                | Block::Campfire
         )
     }
 
@@ -262,7 +284,8 @@ impl Block {
         const PORTAL: Material = Material {
             reflectivity: 0.1,
             transparency: 0.3,
-            emission: 0.9,
+            emission: 1.2, // Reducido un poco para que no sature
+            animated: true,
             ..Material::matte(0.2, 30.0)
         };
         const GLOW: Material = Material {
@@ -281,10 +304,19 @@ impl Block {
             Block::Stone => (FaceTextures::uniform(terrain.stone), ROCK),
             Block::Deepslate => (FaceTextures::uniform(terrain.deepslate), ROCK),
             Block::StoneBricks | Block::StoneSlab => (uniform("stone_bricks"), ROCK),
+            // En el bioma Sakura los arboles cambian a cerezo; todo lo demas
+            // (cabana, cercas, suelo) se mantiene igual que en los otros biomas.
+            Block::OakLog if biome == Biome::Sakura => (
+                FaceTextures::top_side_bottom(tex("cherry_log_top"), tex("cherry_log"), tex("cherry_log_top")),
+                WOOD,
+            ),
             Block::OakLog => (uniform("oak_log"), WOOD),
             Block::StrippedOakLog => (uniform("stripped_oak_log"), WOOD),
             Block::OakPlanks | Block::Fence => (uniform("oak_planks"), WOOD),
             Block::SprucePlanks => (uniform("spruce_planks"), WOOD),
+            Block::Leaves if biome == Biome::Sakura => {
+                (uniform("cherry_leaves"), Material::matte(0.1, 18.0))
+            }
             Block::Leaves => (uniform("oak_leaves"), Material::matte(0.1, 18.0)),
             Block::Water | Block::Droplet => (FaceTextures::uniform(terrain.water), WATER),
             Block::DirtPath => (
@@ -299,7 +331,8 @@ impl Block {
             Block::Glass => (uniform("glass"), GLASS),
             Block::Obsidian => (uniform("obsidian"), OBSIDIAN),
             Block::Portal => (uniform("nether_portal"), PORTAL),
-            Block::Torch | Block::Lantern => (uniform("glowstone"), GLOW),
+            Block::Torch => (uniform("glowstone"), GLOW),
+            Block::Lantern => (uniform("glowstone"), GLOW),
             Block::Fern => (uniform("oak_leaves"), Material::matte(0.05, 6.0)),
             Block::Poppy => (uniform("poppy"), Material::matte(0.05, 6.0)),
             Block::Dandelion => (uniform("dandelion"), Material::matte(0.05, 6.0)),
@@ -315,6 +348,11 @@ impl Block {
                 Material::matte(0.05, 6.0),
             ),
             Block::Cloud => (uniform("snow"), Material::matte(0.0, 1.0)),
+            Block::Campfire => (
+                FaceTextures::top_side_bottom(tex("campfire_fire"), tex("campfire_log"), tex("campfire_log")),
+                GLOW,
+            ),
+            Block::SeaLantern => (uniform("sea_lantern"), GLOW),
         }
     }
 }
@@ -400,8 +438,10 @@ fn surface_height(x: i32, z: i32) -> i32 {
 const CLIFF_TOP: i32 = 6;
 
 fn bottom_height(x: i32, z: i32, q: f32) -> i32 {
-    let depth = 5.0 + 6.0 * (1.0 - q).max(0.0).powf(0.7);
-    -(depth.round() as i32) - (hash(z, x) % 2) as i32
+    let base_depth = 5.0 + 8.0 * (1.0 - q).max(0.0).powf(0.7);
+    // Menos frecuentes y mas cortas que antes: quedaba muy picudo y cargado por abajo.
+    let stalactite = if hash(x * 3, z * 7) % 18 == 0 { (hash(x, z) % 3) as i32 } else { 0 };
+    -(base_depth.round() as i32) - (hash(z, x) % 2) as i32 - stalactite
 }
 
 const RIVER_Z: std::ops::RangeInclusive<i32> = 15..=17;
@@ -434,7 +474,15 @@ fn build_terrain(world: &mut World) {
                 } else if y >= top - dirt_depth {
                     Block::Dirt
                 } else if y > deepslate_line {
-                    Block::Stone
+                    // Parches de ladrillo de piedra rajado entre la piedra, para que
+                    // la pared del corte no sea un solo material parejo.
+                    if hash(x * 3 + y * 13, z * 5 - y * 7) % 6 == 0 {
+                        Block::StoneBricks
+                    } else {
+                        Block::Stone
+                    }
+                } else if hash(x * 7 + y * 17, z * 11 - y * 3) % 8 == 0 {
+                    Block::Obsidian
                 } else {
                     Block::Deepslate
                 };
@@ -485,6 +533,12 @@ fn build_water(world: &mut World) {
             world.set(edge_x + 1 + dx, y, z, Block::Droplet);
         }
     }
+
+    // Luces submarinas mágicas
+    world.set(11, -1, 16, Block::SeaLantern);
+    world.add_light(Vec3::new(11.0, -0.8, 16.0), 0x55FFFF, 2.0, 15.0);
+    world.set(9, -1, 9, Block::SeaLantern);
+    world.add_light(Vec3::new(9.0, -0.8, 9.0), 0x55FFFF, 2.0, 15.0);
 }
 
 fn build_cabin(world: &mut World) {
@@ -520,6 +574,10 @@ fn build_cabin(world: &mut World) {
     world.set(17, 2, z1, Block::Glass);
     world.set(x1, 2, 5, Block::Glass);
     world.set(x1, 2, 6, Block::Glass);
+
+    // Luz interior para que las ventanas brillen de noche.
+    world.set(17, 2, 6, Block::Torch);
+    world.add_light(Vec3::new(17.0, 2.0, 6.0), 0xFFB060, 2.5, 15.0);
 
     // Techo escalonado a dos aguas con alero.
     for (y, from, to) in [(4, z0 - 1, z1 + 1), (5, z0, z1), (6, z0 + 1, z1 - 1), (7, z0 + 2, z1 - 2)] {
@@ -665,6 +723,76 @@ fn build_floating_debris(world: &mut World) {
     }
 }
 
+fn column_bottom(world: &World, x: i32, z: i32, top: i32) -> i32 {
+    let mut y = top;
+    while world.get(x, y - 1, z).is_some() {
+        y -= 1;
+    }
+    y
+}
+
+// Salientes y hendiduras en el borde de la isla: sin esto, la pared del corte
+// es una franja lisa y pareja. Sobresaltos y huecos le dan relieve real.
+fn build_cliff_details(world: &mut World) {
+    let mut sites = Vec::new();
+    for x in -PAD..SIZE + PAD {
+        for z in -PAD..SIZE + PAD {
+            sites.push((x, z));
+        }
+    }
+
+    for (x, z) in sites {
+        let q = edge_distance(x, z);
+        if !(0.72..=1.0).contains(&q) {
+            continue;
+        }
+        let Some(top) = world.top_y(x, z) else {
+            continue;
+        };
+        if world.get(x, top, z) != Some(Block::Grass) {
+            continue;
+        }
+        let bottom = column_bottom(world, x, z, top);
+        if top - bottom < 3 {
+            continue;
+        }
+
+        let dx = (x as f32 - CENTER).signum() as i32;
+        let dz = (z as f32 - CENTER).signum() as i32;
+        if dx == 0 && dz == 0 {
+            continue;
+        }
+
+        let roll = hash(x * 19 + 5, z * 23 + 7) % 6;
+        let y = bottom + 1 + (hash(x + 2, z - 2) % (top - bottom - 2).max(1) as u32) as i32;
+
+        match roll {
+            // Saliente: un bloque extra hacia afuera, repitiendo el material de esa altura.
+            0 | 1 => {
+                if let Some(block) = world.get(x, y, z) {
+                    if world.get(x + dx, y, z).is_none() {
+                        world.set(x + dx, y, z, block);
+                    }
+                }
+            }
+            2 => {
+                if let Some(block) = world.get(x, y, z) {
+                    if world.get(x, y, z + dz).is_none() {
+                        world.set(x, y, z + dz, block);
+                    }
+                }
+            }
+            // Hendidura: se saca un bloque interior, deja una sombra/hueco en la pared.
+            3 | 4 => {
+                if y > bottom + 1 && y < top {
+                    world.remove(x, y, z);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 // Dispersa fernas, flores y rocas sueltas por todo el pasto libre, para que la
 // isla no se vea plana. Se corre al final, asi solo ocupa celdas que quedaron vacias.
 fn build_ground_details(world: &mut World) {
@@ -683,7 +811,8 @@ fn build_ground_details(world: &mut World) {
             continue;
         }
 
-        let block = match hash(x * 17 + 3, z * 31 + 11) % 20 {
+        // Bajamos la densidad a la mitad (antes 6 de 20, ahora 6 de 40): quedaba muy cargado.
+        let block = match hash(x * 17 + 3, z * 31 + 11) % 40 {
             0 | 1 | 2 => Some(Block::Fern),
             3 => Some(Block::Poppy),
             4 => Some(Block::Dandelion),
@@ -728,6 +857,21 @@ fn build_clouds(world: &mut World) {
     }
 }
 
+fn build_camp(world: &mut World) {
+    let (cx, cz) = (2, 16);
+    let Some(ground) = world.top_y(cx, cz) else { return; };
+    let y = ground + 1;
+    
+    world.set(cx, y, cz, Block::Campfire);
+    world.add_light(Vec3::new(cx as f32, y as f32 + 0.2, cz as f32), 0xFF8833, 3.5, 20.0);
+    
+    // Troncos para sentarse alrededor
+    if world.top_y(cx + 2, cz) == Some(ground) { world.set(cx + 2, y, cz, Block::OakLog); }
+    if world.top_y(cx - 2, cz) == Some(ground) { world.set(cx - 2, y, cz, Block::OakLog); }
+    if world.top_y(cx, cz + 2) == Some(ground) { world.set(cx, y, cz + 2, Block::OakLog); }
+    if world.top_y(cx, cz - 2) == Some(ground) { world.set(cx, y, cz - 2, Block::OakLog); }
+}
+
 fn build_tree(
     world: &mut World,
     x: i32,
@@ -760,15 +904,24 @@ fn build_vegetation(world: &mut World) {
     let above_cliff = CLIFF_TOP + 1;
     build_tree(world, 2, 10, above_cliff, 5, 3.0, Block::OakLog);
     build_tree(world, 3, 4, above_cliff, 5, 2.8, Block::OakLog);
-    build_tree(world, 13, 3, 1, 8, 3.4, Block::OakLog);
+    
+    // Árbol frontal removido a petición y reemplazado con bloque de coral luminoso elevado
+    let ground_13_3 = world.top_y(13, 3).unwrap_or(0);
+    world.set(13, ground_13_3 + 1, 3, Block::Fence);
+    world.set(13, ground_13_3 + 2, 3, Block::Fence);
+    world.set(13, ground_13_3 + 3, 3, Block::SeaLantern);
+    world.add_light(Vec3::new(13.0, ground_13_3 as f32 + 3.0, 3.0), 0x88FFDD, 2.5, 20.0);
 
-    // Arboles y arbustos sueltos en la franja de pasto nueva, para que no quede vacia.
-    build_tree(world, -2, 13, 1, 6, 2.6, Block::OakLog);
-    build_tree(world, -3, 20, 1, 5, 2.4, Block::OakLog);
-    build_tree(world, 25, 7, 1, 6, 2.8, Block::OakLog);
-    build_tree(world, 24, 18, 1, 5, 2.4, Block::OakLog);
-    // Tronco claro (tipo abedul) para variar el paisaje.
-    build_tree(world, 22, 5, 1, 6, 2.6, Block::StrippedOakLog);
+    // Solo dejamos el árbol del fondo a la izquierda (-3, 20)
+    if let Some(top) = world.top_y(-3, 20) { build_tree(world, -3, 20, top + 1, 5, 2.4, Block::OakLog); }
+    
+    // Reemplazamos los otros árboles sueltos con pilares luminosos (Sea Lantern) súper fuertes
+    if let Some(top) = world.top_y(24, 18) {
+        world.set(24, top + 1, 18, Block::Fence);
+        world.set(24, top + 2, 18, Block::Fence);
+        world.set(24, top + 3, 18, Block::SeaLantern);
+        world.add_light(Vec3::new(24.0, top as f32 + 3.0, 18.0), 0x88FFDD, 2.5, 20.0);
+    }
 
     for (x, z, height) in [
         (5, 14, 2),
@@ -779,7 +932,6 @@ fn build_vegetation(world: &mut World) {
         (0, 8, 1),
         (-2, 4, 1),
         (1, 20, 1),
-        (23, 10, 1),
         (22, 21, 1),
     ] {
         if let Some(top) = world.top_y(x, z) {
@@ -803,17 +955,74 @@ fn build_portal_cave(world: &mut World) {
         .clone()
         .map(|x| (-PAD..SIZE + PAD).rev().find(|&z| world.get(x, -3, z).is_some()).unwrap())
         .collect();
+    
     let back = walls.iter().min().unwrap() - 2;
+    let frame_z = back + 1;
 
-    for (x, wall) in cave_x.zip(&walls) {
+    // Túnel horizontal hacia el precipicio
+    for (x, wall) in cave_x.clone().zip(&walls) {
         for y in -5..=-2 {
-            for z in back + 1..=*wall {
+            for z in frame_z..=*wall {
                 world.remove(x, y, z);
             }
         }
     }
 
-    let frame_z = back + 1;
+    // Fosa orgánica y natural tipo "cenote" inclinado
+    for step in 0..=5 {
+        let z = frame_z - 5 + step;
+        let floor_y = -step; 
+        
+        // El camino serpentea suavemente usando una función seno
+        let center_x = 12.5 + (step as f32 * 0.7).sin() * 1.5;
+        
+        for x in 7..=18 {
+            let dx = (x as f32 - center_x).abs();
+            // Ruido para bordes irregulares
+            let noise = (hash(x * 7 + step, z * 3) % 100) as f32 / 100.0;
+            
+            let core_width = 1.2 + noise * 1.5;
+            let slope_width = core_width + 3.0; // Anchura total incluyendo laderas
+
+            if dx < slope_width {
+                if let Some(top) = world.top_y(x, z) {
+                    let mut slope_y = floor_y;
+                    if dx > core_width {
+                        slope_y += ((dx - core_width) * 1.5) as i32; // Sube gradualmente en las laderas
+                    }
+
+                    if slope_y <= top {
+                        // Vaciamos el agujero
+                        for y in slope_y..=top + 1 {
+                            world.remove(x, y, z);
+                        }
+
+                        let rand_val = hash(x, z);
+                        // Decoramos el terreno expuesto
+                        if dx <= core_width {
+                            // El fondo del camino se ve pisoteado y rocoso
+                            let trail_block = match rand_val % 6 {
+                                0 => Block::DirtPath,
+                                1 => Block::Stone,
+                                2 => Block::Rock,
+                                _ => Block::Dirt,
+                            };
+                            world.set(x, slope_y - 1, z, trail_block);
+                        } else {
+                            // Las laderas tienen pasto y a veces piedra asomando
+                            if rand_val % 4 == 0 {
+                                world.set(x, slope_y - 1, z, Block::Stone);
+                            } else {
+                                world.set(x, slope_y - 1, z, Block::Grass);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Construcción del portal en la base de la fosa
     for x in 11..=14 {
         world.set(x, -6, frame_z, Block::Obsidian);
         world.set(x, -1, frame_z, Block::Obsidian);
@@ -830,13 +1039,18 @@ fn build_portal_cave(world: &mut World) {
 
     world.set(9, -3, frame_z, Block::Torch);
 
+    // Iluminación
     let front = frame_z as f32 + 0.6;
+    let back_light = frame_z as f32 - 0.6;
     world.add_light(Vec3::new(9.0, -2.9, front), 0xFFAA50, 1.6, 6.0);
-    world.add_light(Vec3::new(12.5, -3.5, front), 0xAA46FF, 1.8, 7.0);
+    
+    // Luces del portal morado balanceadas
+    world.add_light(Vec3::new(12.5, -3.5, front), 0xC222FF, 2.5, 10.0);
+    world.add_light(Vec3::new(12.5, -3.5, back_light), 0xC222FF, 2.8, 15.0);
 }
 
 fn build_lanterns(world: &mut World) {
-    for (x, z) in [(13, 9), (16, 18)] {
+    for (x, z) in [(13, 9), (16, 18), (8, 16), (2, 7)] {
         let Some(ground) = world.top_y(x, z) else {
             continue;
         };
@@ -912,6 +1126,7 @@ fn block_shapes(world: &World, block: Block, x: i32, y: i32, z: i32) -> Vec<(Vec
         }
         Block::Barrel => vec![(Vec3::new(0.0, -0.15, 0.0), Vec3::new(0.75, 0.7, 0.75))],
         Block::Cloud => vec![(Vec3::zeros(), Vec3::new(1.0, 0.55, 1.0))],
+        Block::Campfire => vec![(Vec3::new(0.0, -0.25, 0.0), Vec3::new(1.0, 0.5, 1.0))],
         _ => vec![full],
     }
 }
@@ -1003,9 +1218,11 @@ pub fn build_diorama(biome: Biome) -> Scene {
     build_lanterns(&mut world);
     build_watchtower(&mut world, 24, 10);
     build_floating_debris(&mut world);
+    build_cliff_details(&mut world);
     build_cabin_details(&mut world);
     build_clouds(&mut world);
     build_ground_details(&mut world);
+    build_camp(&mut world);
 
     // Arranca en la hora dorada del atardecer; el ciclo completo vive en daycycle.rs.
     let (sun, ambient, sky) = crate::daycycle::lighting_at(0.78);
