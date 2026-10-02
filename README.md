@@ -8,8 +8,7 @@ Solo usa las dos dependencias del curso: `minifb` para la ventana y `nalgebra-gl
 
 ## Video
 
-<!-- Pegar aquí el enlace o el archivo del video de demostración -->
-_Pendiente: enlace al video de demostración._
+[Ver el video de demostración en YouTube](https://youtu.be/IWEjTmwfZ6A)
 
 ## Cómo ejecutarlo
 
